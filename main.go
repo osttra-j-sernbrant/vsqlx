@@ -840,7 +840,7 @@ func main() {
 	}
 	defaultTLSMode := os.Getenv("VERTICA_TLSMODE")
 	if defaultTLSMode == "" {
-		defaultTLSMode = "prefer"
+		defaultTLSMode = "none"
 	}
 
 	var (
@@ -913,7 +913,12 @@ func main() {
 		}
 	}
 
-	dsn := buildDSN(host, port, user, pass, dbName, tlsMode)
+	tlsModeMapped := tlsMode
+	if strings.ToLower(tlsModeMapped) == "disable" {
+		tlsModeMapped = "none"
+	}
+
+	dsn := buildDSN(host, port, user, pass, dbName, tlsModeMapped)
 
 	db, err := sql.Open("vertica", dsn)
 	if err != nil {
