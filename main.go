@@ -526,58 +526,88 @@ func main() {
 		defaultTLSMode = "prefer"
 	}
 
-	hostFlag := flag.String("host", defaultHost, "Vertica host")
-	portFlag := flag.Int("port", defaultPort, "Vertica port")
-	userFlag := flag.String("user", defaultUser, "Vertica user")
-	passwordFlag := flag.String("password", defaultPassword, "Vertica password")
-	dbFlag := flag.String("db", defaultDB, "Vertica database name")
-	tlsModeFlag := flag.String("tlsmode", defaultTLSMode, "Vertica TLS mode (prefer, server, none)")
+	var (
+		host       string
+		port       int
+		user       string
+		password   string
+		dbName     string
+		tlsMode    string
+		query      string
+		file       string
+		format     string
+		outputPath string
+		timeout    time.Duration
+	)
 
-	queryFlag := flag.String("query", "", "SQL query to execute")
-	fileFlag := flag.String("file", "", "Path to a file containing the SQL query")
-	formatFlag := flag.String("format", "table", "Output format: table, json, csv, parquet")
+	// Connection options (compatible with vsql)
+	flag.StringVar(&host, "host", defaultHost, "Database server host")
+	flag.StringVar(&host, "h", defaultHost, "Database server host (shorthand)")
 
-	var outputPath string
+	flag.IntVar(&port, "port", defaultPort, "Database server port")
+	flag.IntVar(&port, "p", defaultPort, "Database server port (shorthand)")
+
+	flag.StringVar(&user, "user", defaultUser, "Database user name")
+	flag.StringVar(&user, "U", defaultUser, "Database user name (shorthand)")
+
+	flag.StringVar(&password, "password", defaultPassword, "Database user password")
+	flag.StringVar(&password, "w", defaultPassword, "Database user password (shorthand)")
+
+	flag.StringVar(&dbName, "db", defaultDB, "Database name")
+	flag.StringVar(&dbName, "d", defaultDB, "Database name (shorthand)")
+
+	flag.StringVar(&tlsMode, "tlsmode", defaultTLSMode, "SSL mode (prefer, server, none)")
+	flag.StringVar(&tlsMode, "m", defaultTLSMode, "SSL mode (prefer, server, none) (shorthand)")
+
+	// Execution and output options (compatible with vsql)
+	flag.StringVar(&query, "query", "", "SQL query to execute")
+	flag.StringVar(&query, "c", "", "SQL query to execute (shorthand)")
+
+	flag.StringVar(&file, "file", "", "Path to a file containing the SQL query")
+	flag.StringVar(&file, "f", "", "Path to a file containing the SQL query (shorthand)")
+
 	flag.StringVar(&outputPath, "output", "", "Output file path (optional, defaults to stdout)")
 	flag.StringVar(&outputPath, "o", "", "Output file path (optional, defaults to stdout) (shorthand)")
 
-	timeoutFlag := flag.Duration("timeout", 30*time.Second, "Query timeout duration")
+	// Format extensions
+	flag.StringVar(&format, "format", "table", "Output format: table, json, csv, parquet")
+	flag.DurationVar(&timeout, "timeout", 30*time.Second, "Query timeout duration")
 
 	flag.Parse()
 
-	var query string
-	if *queryFlag != "" {
-		query = *queryFlag
-	} else if *fileFlag != "" {
+	var queryStr string
+	if query != "" {
+		queryStr = query
+	} else if file != "" {
 		var err error
-		query, err = readSQLFile(*fileFlag)
+		queryStr, err = readSQLFile(file)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: Failed to read SQL file: %v\n", err)
 			os.Exit(1)
 		}
 	} else {
 		var err error
-		query, err = readStdin()
+		queryStr, err = readStdin()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: Failed to read from stdin: %v\n", err)
 			os.Exit(1)
 		}
 	}
 
-	query = strings.TrimSpace(query)
-	if query == "" {
-		fmt.Fprintln(os.Stderr, "Error: No query provided. Use -query, -file, or pipe a query to stdin.")
+	queryStr = strings.TrimSpace(queryStr)
+	if queryStr == "" {
+		fmt.Fprintln(os.Stderr, "Error: No query provided. Use -query (-c), -file (-f), or pipe a query to stdin.")
 		os.Exit(1)
 	}
 
-	password := *passwordFlag
-	if password == "" {
-		if pass, err := getPasswordFromPgpass(*hostFlag, strconv.Itoa(*portFlag), *dbFlag, *userFlag); err == nil {
-			password = pass
+	pass := password
+	if pass == "" {
+		if p, err := getPasswordFromPgpass(host, strconv.Itoa(port), dbName, user); err == nil {
+			pass = p
 		}
 	}
 
-	dsn := buildDSN(*hostFlag, *portFlag, *userFlag, password, *dbFlag, *tlsModeFlag)
+	dsn := buildDSN(host, port, user, pass, dbName, tlsMode)
 
 	db, err := sql.Open("vertica", dsn)
 	if err != nil {
@@ -586,7 +616,7 @@ func main() {
 	}
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), *timeoutFlag)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	if err := db.PingContext(ctx); err != nil {
@@ -594,7 +624,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	rows, err := db.QueryContext(ctx, query)
+	rows, err := db.QueryContext(ctx, queryStr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: Query failed: %v\n", err)
 		os.Exit(1)
@@ -622,7 +652,7 @@ func main() {
 		}
 		defer file.Close()
 		output = file
-	} else if strings.ToLower(*formatFlag) == "parquet" {
+	} else if strings.ToLower(format) == "parquet" {
 		stat, _ := os.Stdout.Stat()
 		if (stat.Mode() & os.ModeCharDevice) != 0 {
 			fmt.Fprintln(os.Stderr, "Error: Writing binary Parquet data to a terminal is not allowed. Please specify an output file with -output (-o) or redirect stdout.")
@@ -630,7 +660,7 @@ func main() {
 		}
 	}
 
-	switch strings.ToLower(*formatFlag) {
+	switch strings.ToLower(format) {
 	case "json":
 		err = formatJSON(output, cols, rows)
 	case "csv":
@@ -640,7 +670,7 @@ func main() {
 	case "parquet":
 		err = formatParquet(output, cols, rows, colTypes)
 	default:
-		fmt.Fprintf(os.Stderr, "Error: Unknown format %q. Supported formats: table, json, csv, parquet\n", *formatFlag)
+		fmt.Fprintf(os.Stderr, "Error: Unknown format %q. Supported formats: table, json, csv, parquet\n", format)
 		os.Exit(1)
 	}
 
