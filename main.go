@@ -106,7 +106,7 @@ func toJSONValue(val interface{}) interface{} {
 }
 
 func buildConverter(ct *sql.ColumnType) func(any) any {
-	if ct == nil || ct.ScanType() == nil {
+	if ct == nil {
 		return func(val any) any {
 			if val == nil {
 				return nil
@@ -115,6 +115,148 @@ func buildConverter(ct *sql.ColumnType) func(any) any {
 				return string(b)
 			}
 			return val
+		}
+	}
+
+	dbTypeName := strings.ToUpper(ct.DatabaseTypeName())
+
+	if strings.Contains(dbTypeName, "INT") {
+		return func(val any) any {
+			if val == nil {
+				return nil
+			}
+			switch v := val.(type) {
+			case int64:
+				return v
+			case int:
+				return int64(v)
+			case sql.NullInt64:
+				if v.Valid {
+					return v.Int64
+				}
+				return nil
+			case []byte:
+				i, _ := strconv.ParseInt(string(v), 10, 64)
+				return i
+			case string:
+				i, _ := strconv.ParseInt(v, 10, 64)
+				return i
+			}
+			rVal := reflect.ValueOf(val)
+			if rVal.Kind() == reflect.Ptr {
+				if rVal.IsNil() {
+					return nil
+				}
+				return reflect.Indirect(rVal).Convert(reflect.TypeOf(int64(0))).Interface()
+			}
+			return rVal.Convert(reflect.TypeOf(int64(0))).Interface()
+		}
+	}
+
+	if strings.Contains(dbTypeName, "FLOAT") || strings.Contains(dbTypeName, "DOUBLE") || strings.Contains(dbTypeName, "REAL") || strings.Contains(dbTypeName, "NUMERIC") || strings.Contains(dbTypeName, "DECIMAL") {
+		return func(val any) any {
+			if val == nil {
+				return nil
+			}
+			switch v := val.(type) {
+			case float64:
+				return v
+			case float32:
+				return float64(v)
+			case sql.NullFloat64:
+				if v.Valid {
+					return v.Float64
+				}
+				return nil
+			case []byte:
+				f, _ := strconv.ParseFloat(string(v), 64)
+				return f
+			case string:
+				f, _ := strconv.ParseFloat(v, 64)
+				return f
+			}
+			rVal := reflect.ValueOf(val)
+			if rVal.Kind() == reflect.Ptr {
+				if rVal.IsNil() {
+					return nil
+				}
+				return reflect.Indirect(rVal).Convert(reflect.TypeOf(float64(0.0))).Interface()
+			}
+			return rVal.Convert(reflect.TypeOf(float64(0.0))).Interface()
+		}
+	}
+
+	if strings.Contains(dbTypeName, "BOOL") {
+		return func(val any) any {
+			if val == nil {
+				return nil
+			}
+			switch v := val.(type) {
+			case bool:
+				return v
+			case sql.NullBool:
+				if v.Valid {
+					return v.Bool
+				}
+				return nil
+			case int64:
+				return v != 0
+			case int:
+				return v != 0
+			case string:
+				b, _ := strconv.ParseBool(v)
+				return b
+			case []byte:
+				b, _ := strconv.ParseBool(string(v))
+				return b
+			}
+			return false
+		}
+	}
+
+	if strings.Contains(dbTypeName, "TIME") || strings.Contains(dbTypeName, "DATE") {
+		return func(val any) any {
+			if val == nil {
+				return nil
+			}
+			switch v := val.(type) {
+			case time.Time:
+				return v
+			case sql.NullTime:
+				if v.Valid {
+					return v.Time
+				}
+				return nil
+			case string:
+				if t, err := time.Parse(time.RFC3339, v); err == nil {
+					return t
+				}
+			case []byte:
+				if t, err := time.Parse(time.RFC3339, string(v)); err == nil {
+					return t
+				}
+			}
+			return nil
+		}
+	}
+
+	if ct.ScanType() == nil {
+		return func(val any) any {
+			if val == nil {
+				return nil
+			}
+			switch v := val.(type) {
+			case string:
+				return v
+			case []byte:
+				return string(v)
+			case sql.NullString:
+				if v.Valid {
+					return v.String
+				}
+				return nil
+			}
+			return fmt.Sprintf("%v", val)
 		}
 	}
 
@@ -425,11 +567,30 @@ func formatJSON(w io.Writer, cols []string, rows *sql.Rows) error {
 	return encoder.Encode(results)
 }
 
+type orderedGroup struct {
+	parquet.Node
+	orderedFields []parquet.Field
+}
+
+func (o orderedGroup) Fields() []parquet.Field {
+	return o.orderedFields
+}
+
 func formatParquet(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.ColumnType) error {
 	group := parquet.Group{}
 	for _, ct := range colTypes {
 		var node parquet.Node
-		if ct.ScanType() != nil {
+		dbTypeName := strings.ToUpper(ct.DatabaseTypeName())
+
+		if strings.Contains(dbTypeName, "INT") {
+			node = parquet.Int(64)
+		} else if strings.Contains(dbTypeName, "FLOAT") || strings.Contains(dbTypeName, "DOUBLE") || strings.Contains(dbTypeName, "REAL") || strings.Contains(dbTypeName, "NUMERIC") || strings.Contains(dbTypeName, "DECIMAL") {
+			node = parquet.Leaf(parquet.DoubleType)
+		} else if strings.Contains(dbTypeName, "BOOL") {
+			node = parquet.Leaf(parquet.BooleanType)
+		} else if strings.Contains(dbTypeName, "TIME") || strings.Contains(dbTypeName, "DATE") {
+			node = parquet.Timestamp(parquet.Microsecond)
+		} else if ct.ScanType() != nil {
 			switch ct.ScanType().Kind() {
 			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 				reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
@@ -453,7 +614,25 @@ func formatParquet(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.C
 		group[ct.Name()] = parquet.Optional(node)
 	}
 
-	schema := parquet.NewSchema("query_results", group)
+	fields := group.Fields()
+	fieldMap := make(map[string]parquet.Field)
+	for _, f := range fields {
+		fieldMap[f.Name()] = f
+	}
+
+	orderedFields := make([]parquet.Field, 0, len(colTypes))
+	for _, ct := range colTypes {
+		if f, ok := fieldMap[ct.Name()]; ok {
+			orderedFields = append(orderedFields, f)
+		}
+	}
+
+	root := orderedGroup{
+		Node:          group,
+		orderedFields: orderedFields,
+	}
+
+	schema := parquet.NewSchema("query_results", root)
 
 	writer := parquet.NewGenericWriter[any](w, schema)
 	defer writer.Close()
