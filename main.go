@@ -87,6 +87,10 @@ func buildStringConverter(ct *sql.ColumnType) func(any) string {
 				return "NULL"
 			}
 			switch v := val.(type) {
+			case float64:
+				return strconv.FormatFloat(v, 'f', -1, 64)
+			case float32:
+				return strconv.FormatFloat(float64(v), 'f', -1, 32)
 			case []byte:
 				return string(v)
 			case time.Time:
@@ -151,6 +155,10 @@ func buildStringConverter(ct *sql.ColumnType) func(any) string {
 			return "NULL"
 		}
 		switch v := val.(type) {
+		case float64:
+			return strconv.FormatFloat(v, 'f', -1, 64)
+		case float32:
+			return strconv.FormatFloat(float64(v), 'f', -1, 32)
 		case []byte:
 			return string(v)
 		case time.Time:
