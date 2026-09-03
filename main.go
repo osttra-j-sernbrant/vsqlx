@@ -858,39 +858,22 @@ func main() {
 		verbose    bool
 	)
 
-	// Connection options (compatible with vsql)
-	flag.StringVar(&host, "host", defaultHost, "Database server host")
-	flag.StringVar(&host, "h", defaultHost, "Database server host (shorthand)")
+	// Connection and execution options (matching vsql short flags exactly)
+	flag.StringVar(&host, "h", defaultHost, "Database server host")
+	flag.IntVar(&port, "p", defaultPort, "Database server port")
+	flag.StringVar(&user, "U", defaultUser, "Database user name")
+	flag.StringVar(&password, "w", defaultPassword, "Database user password")
+	flag.StringVar(&dbName, "d", defaultDB, "Database name")
+	flag.StringVar(&tlsMode, "m", defaultTLSMode, "SSL mode (verify-full, require, prefer, allow, disable)")
+	flag.StringVar(&query, "c", "", "SQL query to execute")
+	flag.StringVar(&file, "f", "", "Path to a file containing the SQL query")
+	flag.StringVar(&outputPath, "o", "", "Output file path (optional, defaults to stdout)")
 
-	flag.IntVar(&port, "port", defaultPort, "Database server port")
-	flag.IntVar(&port, "p", defaultPort, "Database server port (shorthand)")
-
-	flag.StringVar(&user, "user", defaultUser, "Database user name")
-	flag.StringVar(&user, "U", defaultUser, "Database user name (shorthand)")
-
-	flag.StringVar(&password, "password", defaultPassword, "Database user password")
-	flag.StringVar(&password, "w", defaultPassword, "Database user password (shorthand)")
-
-	flag.StringVar(&dbName, "db", defaultDB, "Database name")
-	flag.StringVar(&dbName, "d", defaultDB, "Database name (shorthand)")
-
-	flag.StringVar(&tlsMode, "tlsmode", defaultTLSMode, "SSL mode (prefer, server, none)")
-	flag.StringVar(&tlsMode, "m", defaultTLSMode, "SSL mode (prefer, server, none) (shorthand)")
-
-	// Execution and output options (compatible with vsql)
-	flag.StringVar(&query, "query", "", "SQL query to execute")
-	flag.StringVar(&query, "c", "", "SQL query to execute (shorthand)")
-
-	flag.StringVar(&file, "file", "", "Path to a file containing the SQL query")
-	flag.StringVar(&file, "f", "", "Path to a file containing the SQL query (shorthand)")
-
-	flag.StringVar(&outputPath, "output", "", "Output file path (optional, defaults to stdout)")
-	flag.StringVar(&outputPath, "o", "", "Output file path (optional, defaults to stdout) (shorthand)")
-
-	// Format extensions
+	// Format extensions (non-vsql flags)
 	flag.StringVar(&format, "format", "table", "Output format: table, json, csv, parquet")
 	flag.DurationVar(&timeout, "timeout", 30*time.Second, "Query timeout duration")
 	flag.BoolVar(&verbose, "verbose", false, "Enable verbose driver warning and error logs")
+	flag.BoolVar(&verbose, "v", false, "Enable verbose driver warning and error logs (shorthand)")
 
 	flag.Parse()
 
