@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/parquet-go/parquet-go"
-	_ "github.com/vertica/vertica-sql-go"
+	vertica "github.com/vertica/vertica-sql-go"
 	vlogger "github.com/vertica/vertica-sql-go/logger"
 )
 
@@ -946,6 +946,10 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
+	vCtx := vertica.NewVerticaContext(ctx)
+	// Cache up to 20,000 rows in memory, paging any overflow to a local temp file on disk to maintain a low and flat RAM footprint
+	vCtx.SetInMemoryResultRowLimit(20000)
+
 	if err := db.PingContext(ctx); err != nil {
 		if err == context.Canceled || strings.Contains(err.Error(), "canceled") {
 			fmt.Fprintln(os.Stderr, "Error: Connection attempt was canceled.")
@@ -961,7 +965,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	rows, err := db.QueryContext(ctx, queryStr)
+	rows, err := db.QueryContext(vCtx, queryStr)
 	if err != nil {
 		if err == context.Canceled || strings.Contains(err.Error(), "canceled") {
 			fmt.Fprintln(os.Stderr, "Error: Query was canceled.")
