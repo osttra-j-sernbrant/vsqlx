@@ -15,7 +15,6 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/parquet-go/parquet-go"
@@ -81,19 +80,83 @@ func buildDSN(host string, port int, user, password, db, tlsMode string) string 
 	return u.String()
 }
 
-func toString(val interface{}) string {
-	if val == nil {
-		return "NULL"
+func buildStringConverter(ct *sql.ColumnType) func(any) string {
+	if ct == nil {
+		return func(val any) string {
+			if val == nil {
+				return "NULL"
+			}
+			switch v := val.(type) {
+			case []byte:
+				return string(v)
+			case time.Time:
+				return v.Format("2006-01-02 15:04:05")
+			}
+			return fmt.Sprintf("%v", val)
+		}
 	}
-	switch v := val.(type) {
-	case []byte:
-		return string(v)
-	case string:
-		return v
-	case time.Time:
-		return v.Format(time.RFC3339)
-	default:
-		return fmt.Sprintf("%v", v)
+
+	dbTypeName := strings.ToUpper(ct.DatabaseTypeName())
+
+	if dbTypeName == "DATE" {
+		return func(val any) string {
+			if val == nil {
+				return "NULL"
+			}
+			switch v := val.(type) {
+			case time.Time:
+				return v.Format("2006-01-02")
+			case string:
+				if t, err := time.Parse(time.RFC3339, v); err == nil {
+					return t.Format("2006-01-02")
+				}
+				return v
+			case []byte:
+				s := string(v)
+				if t, err := time.Parse(time.RFC3339, s); err == nil {
+					return t.Format("2006-01-02")
+				}
+				return s
+			}
+			return fmt.Sprintf("%v", val)
+		}
+	}
+
+	if strings.Contains(dbTypeName, "TIME") || strings.Contains(dbTypeName, "TIMESTAMP") {
+		return func(val any) string {
+			if val == nil {
+				return "NULL"
+			}
+			switch v := val.(type) {
+			case time.Time:
+				return v.Format("2006-01-02 15:04:05")
+			case string:
+				if t, err := time.Parse(time.RFC3339, v); err == nil {
+					return t.Format("2006-01-02 15:04:05")
+				}
+				return v
+			case []byte:
+				s := string(v)
+				if t, err := time.Parse(time.RFC3339, s); err == nil {
+					return t.Format("2006-01-02 15:04:05")
+				}
+				return s
+			}
+			return fmt.Sprintf("%v", val)
+		}
+	}
+
+	return func(val any) string {
+		if val == nil {
+			return "NULL"
+		}
+		switch v := val.(type) {
+		case []byte:
+			return string(v)
+		case time.Time:
+			return v.Format("2006-01-02 15:04:05")
+		}
+		return fmt.Sprintf("%v", val)
 	}
 }
 
@@ -494,37 +557,90 @@ func getPasswordFromPgpass(host, port, dbname, user string) (string, error) {
 	return "", fmt.Errorf("no matching entry found in %s", pgpassPath)
 }
 
-func formatTable(w io.Writer, cols []string, rows *sql.Rows) error {
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, strings.Join(cols, "\t"))
+func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.ColumnType) error {
+	converters := make([]func(any) string, len(colTypes))
+	for i, ct := range colTypes {
+		converters[i] = buildStringConverter(ct)
+	}
 
-	scanArgs := make([]interface{}, len(cols))
-	values := make([]interface{}, len(cols))
+	var bufferedRows [][]string
+	colWidths := make([]int, len(cols))
+	for i, col := range cols {
+		colWidths[i] = len(col)
+	}
+
+	scanArgs := make([]any, len(cols))
+	values := make([]any, len(cols))
 	for i := range values {
 		scanArgs[i] = &values[i]
 	}
 
+	rowCount := 0
 	for rows.Next() {
 		if err := rows.Scan(scanArgs...); err != nil {
 			return err
 		}
-		var rowVals []string
-		for _, val := range values {
-			rowVals = append(rowVals, toString(val))
+		rowVals := make([]string, len(cols))
+		for i := range values {
+			strVal := converters[i](values[i])
+			rowVals[i] = strVal
+			if len(strVal) > colWidths[i] {
+				colWidths[i] = len(strVal)
+			}
 		}
-		fmt.Fprintln(tw, strings.Join(rowVals, "\t"))
+		bufferedRows = append(bufferedRows, rowVals)
+		rowCount++
 	}
-	return tw.Flush()
+
+	var headerParts []string
+	for i, col := range cols {
+		headerParts = append(headerParts, fmt.Sprintf(" %-*s ", colWidths[i], col))
+	}
+	fmt.Fprintln(w, strings.Join(headerParts, "|"))
+
+	var dividerParts []string
+	for _, width := range colWidths {
+		dividerParts = append(dividerParts, strings.Repeat("-", width+2))
+	}
+	fmt.Fprintln(w, strings.Join(dividerParts, "+"))
+
+	for _, rowVals := range bufferedRows {
+		var rowParts []string
+		for i, val := range rowVals {
+			isNumeric := false
+			if i < len(colTypes) {
+				dbTypeName := strings.ToUpper(colTypes[i].DatabaseTypeName())
+				if strings.Contains(dbTypeName, "INT") || strings.Contains(dbTypeName, "FLOAT") || strings.Contains(dbTypeName, "DOUBLE") || strings.Contains(dbTypeName, "REAL") || strings.Contains(dbTypeName, "NUMERIC") || strings.Contains(dbTypeName, "DECIMAL") {
+					isNumeric = true
+				}
+			}
+
+			if isNumeric {
+				rowParts = append(rowParts, fmt.Sprintf(" %*s ", colWidths[i], val))
+			} else {
+				rowParts = append(rowParts, fmt.Sprintf(" %-*s ", colWidths[i], val))
+			}
+		}
+		fmt.Fprintln(w, strings.Join(rowParts, "|"))
+	}
+
+	fmt.Fprintf(w, "(%d rows)\n", rowCount)
+	return nil
 }
 
-func formatCSV(w io.Writer, cols []string, rows *sql.Rows) error {
+func formatCSV(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.ColumnType) error {
 	cw := csv.NewWriter(w)
 	if err := cw.Write(cols); err != nil {
 		return err
 	}
 
-	scanArgs := make([]interface{}, len(cols))
-	values := make([]interface{}, len(cols))
+	converters := make([]func(any) string, len(colTypes))
+	for i, ct := range colTypes {
+		converters[i] = buildStringConverter(ct)
+	}
+
+	scanArgs := make([]any, len(cols))
+	values := make([]any, len(cols))
 	for i := range values {
 		scanArgs[i] = &values[i]
 	}
@@ -533,9 +649,9 @@ func formatCSV(w io.Writer, cols []string, rows *sql.Rows) error {
 		if err := rows.Scan(scanArgs...); err != nil {
 			return err
 		}
-		var rowVals []string
-		for _, val := range values {
-			rowVals = append(rowVals, toString(val))
+		rowVals := make([]string, len(cols))
+		for i := range values {
+			rowVals[i] = converters[i](values[i])
 		}
 		if err := cw.Write(rowVals); err != nil {
 			return err
@@ -879,9 +995,9 @@ func main() {
 	case "json":
 		err = formatJSON(output, cols, rows)
 	case "csv":
-		err = formatCSV(output, cols, rows)
+		err = formatCSV(output, cols, rows, colTypes)
 	case "table":
-		err = formatTable(output, cols, rows)
+		err = formatTable(output, cols, rows, colTypes)
 	case "parquet":
 		err = formatParquet(output, cols, rows, colTypes)
 	default:

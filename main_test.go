@@ -70,13 +70,14 @@ func TestToString(t *testing.T) {
 		{[]byte("world"), "world"},
 		{123, "123"},
 		{true, "true"},
-		{now, now.Format(time.RFC3339)},
+		{now, now.Format("2006-01-02 15:04:05")},
 	}
 
+	conv := buildStringConverter(nil)
 	for _, tt := range tests {
-		got := toString(tt.input)
+		got := conv(tt.input)
 		if got != tt.expected {
-			t.Errorf("toString(%v) = %q, want %q", tt.input, got, tt.expected)
+			t.Errorf("buildStringConverter(nil)(%v) = %q, want %q", tt.input, got, tt.expected)
 		}
 	}
 }
