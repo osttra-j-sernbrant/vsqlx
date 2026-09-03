@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -80,6 +81,17 @@ func buildDSN(host string, port int, user, password, db, tlsMode string) string 
 	return u.String()
 }
 
+func formatFloatVal(v float64) string {
+	abs := math.Abs(v)
+	if abs == 0 {
+		return "0"
+	}
+	if abs >= 1e15 || abs < 1e-5 {
+		return strconv.FormatFloat(v, 'g', -1, 64)
+	}
+	return strconv.FormatFloat(v, 'f', -1, 64)
+}
+
 func buildStringConverter(ct *sql.ColumnType) func(any) string {
 	if ct == nil {
 		return func(val any) string {
@@ -88,9 +100,9 @@ func buildStringConverter(ct *sql.ColumnType) func(any) string {
 			}
 			switch v := val.(type) {
 			case float64:
-				return strconv.FormatFloat(v, 'f', -1, 64)
+				return formatFloatVal(v)
 			case float32:
-				return strconv.FormatFloat(float64(v), 'f', -1, 32)
+				return formatFloatVal(float64(v))
 			case []byte:
 				return string(v)
 			case time.Time:
@@ -156,9 +168,9 @@ func buildStringConverter(ct *sql.ColumnType) func(any) string {
 		}
 		switch v := val.(type) {
 		case float64:
-			return strconv.FormatFloat(v, 'f', -1, 64)
+			return formatFloatVal(v)
 		case float32:
-			return strconv.FormatFloat(float64(v), 'f', -1, 32)
+			return formatFloatVal(float64(v))
 		case []byte:
 			return string(v)
 		case time.Time:
