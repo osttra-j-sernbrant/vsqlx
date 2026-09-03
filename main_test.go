@@ -62,7 +62,7 @@ func TestBuildDSN(t *testing.T) {
 func TestToString(t *testing.T) {
 	now := time.Now()
 	tests := []struct {
-		input    interface{}
+		input    any
 		expected string
 	}{
 		{nil, "NULL"},
@@ -85,8 +85,8 @@ func TestToString(t *testing.T) {
 func TestToJSONValue(t *testing.T) {
 	now := time.Now()
 	tests := []struct {
-		input    interface{}
-		expected interface{}
+		input    any
+		expected any
 	}{
 		{nil, nil},
 		{"hello", "hello"},

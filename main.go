@@ -168,7 +168,7 @@ func buildStringConverter(ct *sql.ColumnType) func(any) string {
 	}
 }
 
-func toJSONValue(val interface{}) interface{} {
+func toJSONValue(val any) any {
 	if val == nil {
 		return nil
 	}
@@ -224,9 +224,9 @@ func buildConverter(ct *sql.ColumnType) func(any) any {
 				if rVal.IsNil() {
 					return nil
 				}
-				return reflect.Indirect(rVal).Convert(reflect.TypeOf(int64(0))).Interface()
+				return reflect.Indirect(rVal).Convert(reflect.TypeFor[int64]()).Interface()
 			}
-			return rVal.Convert(reflect.TypeOf(int64(0))).Interface()
+			return rVal.Convert(reflect.TypeFor[int64]()).Interface()
 		}
 	}
 
@@ -257,9 +257,9 @@ func buildConverter(ct *sql.ColumnType) func(any) any {
 				if rVal.IsNil() {
 					return nil
 				}
-				return reflect.Indirect(rVal).Convert(reflect.TypeOf(float64(0.0))).Interface()
+				return reflect.Indirect(rVal).Convert(reflect.TypeFor[float64]()).Interface()
 			}
-			return rVal.Convert(reflect.TypeOf(float64(0.0))).Interface()
+			return rVal.Convert(reflect.TypeFor[float64]()).Interface()
 		}
 	}
 
@@ -368,9 +368,9 @@ func buildConverter(ct *sql.ColumnType) func(any) any {
 				if rVal.IsNil() {
 					return nil
 				}
-				return reflect.Indirect(rVal).Convert(reflect.TypeOf(int64(0))).Interface()
+				return reflect.Indirect(rVal).Convert(reflect.TypeFor[int64]()).Interface()
 			}
-			return rVal.Convert(reflect.TypeOf(int64(0))).Interface()
+			return rVal.Convert(reflect.TypeFor[int64]()).Interface()
 		}
 
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
@@ -389,9 +389,9 @@ func buildConverter(ct *sql.ColumnType) func(any) any {
 				if rVal.IsNil() {
 					return nil
 				}
-				return reflect.Indirect(rVal).Convert(reflect.TypeOf(int64(0))).Interface()
+				return reflect.Indirect(rVal).Convert(reflect.TypeFor[int64]()).Interface()
 			}
-			return rVal.Convert(reflect.TypeOf(int64(0))).Interface()
+			return rVal.Convert(reflect.TypeFor[int64]()).Interface()
 		}
 
 	case reflect.Float32, reflect.Float64:
@@ -421,9 +421,9 @@ func buildConverter(ct *sql.ColumnType) func(any) any {
 				if rVal.IsNil() {
 					return nil
 				}
-				return reflect.Indirect(rVal).Convert(reflect.TypeOf(float64(0.0))).Interface()
+				return reflect.Indirect(rVal).Convert(reflect.TypeFor[float64]()).Interface()
 			}
-			return rVal.Convert(reflect.TypeOf(float64(0.0))).Interface()
+			return rVal.Convert(reflect.TypeFor[float64]()).Interface()
 		}
 
 	case reflect.Bool:
@@ -574,7 +574,7 @@ func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.Col
 		converters[i] = buildStringConverter(ct)
 
 		nameLen := len(ct.Name())
-		typeWidth := 10
+		var typeWidth int
 		dbTypeName := strings.ToUpper(ct.DatabaseTypeName())
 
 		if strings.Contains(dbTypeName, "INT") {
@@ -591,20 +591,13 @@ func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.Col
 			typeWidth = 19
 		} else {
 			if length, ok := ct.Length(); ok {
-				typeWidth = int(length)
-				if typeWidth > 20 {
-					typeWidth = 20
-				}
+				typeWidth = min(int(length), 20)
 			} else {
 				typeWidth = 12
 			}
 		}
 
-		if nameLen > typeWidth {
-			colWidths[i] = nameLen
-		} else {
-			colWidths[i] = typeWidth
-		}
+		colWidths[i] = max(nameLen, typeWidth)
 	}
 
 	var headerParts []string
@@ -686,18 +679,18 @@ func formatCSV(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.Colum
 }
 
 func formatJSON(w io.Writer, cols []string, rows *sql.Rows) error {
-	scanArgs := make([]interface{}, len(cols))
-	values := make([]interface{}, len(cols))
+	scanArgs := make([]any, len(cols))
+	values := make([]any, len(cols))
 	for i := range values {
 		scanArgs[i] = &values[i]
 	}
 
-	var results []map[string]interface{}
+	var results []map[string]any
 	for rows.Next() {
 		if err := rows.Scan(scanArgs...); err != nil {
 			return err
 		}
-		rowMap := make(map[string]interface{})
+		rowMap := make(map[string]any)
 		for i, col := range cols {
 			rowMap[col] = toJSONValue(values[i])
 		}
@@ -705,7 +698,7 @@ func formatJSON(w io.Writer, cols []string, rows *sql.Rows) error {
 	}
 
 	if results == nil {
-		results = []map[string]interface{}{}
+		results = []map[string]any{}
 	}
 
 	encoder := json.NewEncoder(w)
@@ -948,7 +941,9 @@ func main() {
 
 	vCtx := vertica.NewVerticaContext(ctx)
 	// Cache up to 20,000 rows in memory, paging any overflow to a local temp file on disk to maintain a low and flat RAM footprint
-	vCtx.SetInMemoryResultRowLimit(20000)
+	if err := vCtx.SetInMemoryResultRowLimit(20000); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to set in-memory row limit: %v\n", err)
+	}
 
 	if err := db.PingContext(ctx); err != nil {
 		if err == context.Canceled || strings.Contains(err.Error(), "canceled") {
