@@ -66,21 +66,27 @@ func TestToString(t *testing.T) {
 		input    any
 		expected string
 	}{
-		{nil, "NULL"},
+		{nil, ""},
 		{"hello", "hello"},
 		{[]byte("world"), "world"},
 		{123, "123"},
-		{true, "true"},
+		{true, "t"},
+		{false, "f"},
 		{nowExact, "2026-09-03 23:30:45"},
 		{nowFrac, "2026-09-03 23:30:45.123456"},
 	}
 
-	conv := buildStringConverter(nil)
+	conv := buildStringConverter(nil, "")
 	for _, tt := range tests {
 		got := conv(tt.input)
 		if got != tt.expected {
-			t.Errorf("buildStringConverter(nil)(%v) = %q, want %q", tt.input, got, tt.expected)
+			t.Errorf("buildStringConverter(nil, \"\")(%v) = %q, want %q", tt.input, got, tt.expected)
 		}
+	}
+
+	convCustomNull := buildStringConverter(nil, "NULL")
+	if got := convCustomNull(nil); got != "NULL" {
+		t.Errorf("buildStringConverter(nil, \"NULL\")(nil) = %q, want \"NULL\"", got)
 	}
 }
 

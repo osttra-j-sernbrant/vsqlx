@@ -99,11 +99,11 @@ func formatTimeVal(t time.Time) string {
 	return t.Format("2006-01-02 15:04:05.999999")
 }
 
-func buildStringConverter(ct *sql.ColumnType) func(any) string {
+func buildStringConverter(ct *sql.ColumnType, nullValue string) func(any) string {
 	if ct == nil {
 		return func(val any) string {
 			if val == nil {
-				return "NULL"
+				return nullValue
 			}
 			switch v := val.(type) {
 			case float64:
@@ -114,6 +114,11 @@ func buildStringConverter(ct *sql.ColumnType) func(any) string {
 				return string(v)
 			case time.Time:
 				return formatTimeVal(v)
+			case bool:
+				if v {
+					return "t"
+				}
+				return "f"
 			}
 			return fmt.Sprintf("%v", val)
 		}
@@ -121,10 +126,37 @@ func buildStringConverter(ct *sql.ColumnType) func(any) string {
 
 	dbTypeName := strings.ToUpper(ct.DatabaseTypeName())
 
+	if strings.Contains(dbTypeName, "BOOL") {
+		return func(val any) string {
+			if val == nil {
+				return nullValue
+			}
+			switch v := val.(type) {
+			case bool:
+				if v {
+					return "t"
+				}
+				return "f"
+			case string:
+				if v == "t" || v == "true" || v == "1" {
+					return "t"
+				}
+				return "f"
+			case []byte:
+				s := string(v)
+				if s == "t" || s == "true" || s == "1" {
+					return "t"
+				}
+				return "f"
+			}
+			return fmt.Sprintf("%v", val)
+		}
+	}
+
 	if dbTypeName == "DATE" {
 		return func(val any) string {
 			if val == nil {
-				return "NULL"
+				return nullValue
 			}
 			switch v := val.(type) {
 			case time.Time:
@@ -148,7 +180,7 @@ func buildStringConverter(ct *sql.ColumnType) func(any) string {
 	if strings.Contains(dbTypeName, "TIME") || strings.Contains(dbTypeName, "TIMESTAMP") {
 		return func(val any) string {
 			if val == nil {
-				return "NULL"
+				return nullValue
 			}
 			switch v := val.(type) {
 			case time.Time:
@@ -189,7 +221,7 @@ func buildStringConverter(ct *sql.ColumnType) func(any) string {
 
 	return func(val any) string {
 		if val == nil {
-			return "NULL"
+			return nullValue
 		}
 		switch v := val.(type) {
 		case float64:
@@ -200,6 +232,11 @@ func buildStringConverter(ct *sql.ColumnType) func(any) string {
 			return string(v)
 		case time.Time:
 			return formatTimeVal(v)
+		case bool:
+			if v {
+				return "t"
+			}
+			return "f"
 		}
 		return fmt.Sprintf("%v", val)
 	}
@@ -611,12 +648,32 @@ func centerString(s string, width int) string {
 	return strings.Repeat(" ", leftPad) + s + strings.Repeat(" ", rightPad)
 }
 
-func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.ColumnType) error {
+func formatRow(rowVals []string, colWidths []int, isNumericCol []bool) string {
+	var rowParts []string
+	for i, valStr := range rowVals {
+		if i == len(rowVals)-1 {
+			if isNumericCol[i] {
+				rowParts = append(rowParts, fmt.Sprintf(" %*s", colWidths[i], valStr))
+			} else {
+				rowParts = append(rowParts, fmt.Sprintf(" %s", valStr))
+			}
+		} else {
+			if isNumericCol[i] {
+				rowParts = append(rowParts, fmt.Sprintf(" %*s ", colWidths[i], valStr))
+			} else {
+				rowParts = append(rowParts, fmt.Sprintf(" %-*s ", colWidths[i], valStr))
+			}
+		}
+	}
+	return strings.Join(rowParts, "|")
+}
+
+func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.ColumnType, nullValue string) error {
 	converters := make([]func(any) string, len(colTypes))
 	isNumericCol := make([]bool, len(cols))
 
 	for i, ct := range colTypes {
-		converters[i] = buildStringConverter(ct)
+		converters[i] = buildStringConverter(ct, nullValue)
 		dbTypeName := strings.ToUpper(ct.DatabaseTypeName())
 		if strings.Contains(dbTypeName, "INT") || strings.Contains(dbTypeName, "FLOAT") || strings.Contains(dbTypeName, "DOUBLE") || strings.Contains(dbTypeName, "REAL") || strings.Contains(dbTypeName, "NUMERIC") || strings.Contains(dbTypeName, "DECIMAL") {
 			isNumericCol[i] = true
@@ -671,15 +728,7 @@ func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.Col
 
 	// Print buffered rows
 	for _, rowVals := range bufferedRows {
-		var rowParts []string
-		for i, valStr := range rowVals {
-			if isNumericCol[i] {
-				rowParts = append(rowParts, fmt.Sprintf(" %*s ", colWidths[i], valStr))
-			} else {
-				rowParts = append(rowParts, fmt.Sprintf(" %-*s ", colWidths[i], valStr))
-			}
-		}
-		fmt.Fprintln(w, strings.Join(rowParts, "|"))
+		fmt.Fprintln(w, formatRow(rowVals, colWidths, isNumericCol))
 	}
 
 	// Stream any remaining rows dynamically using the calculated column widths
@@ -688,16 +737,11 @@ func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.Col
 			return err
 		}
 
-		var rowParts []string
+		rowVals := make([]string, len(cols))
 		for i := range values {
-			valStr := converters[i](values[i])
-			if isNumericCol[i] {
-				rowParts = append(rowParts, fmt.Sprintf(" %*s ", colWidths[i], valStr))
-			} else {
-				rowParts = append(rowParts, fmt.Sprintf(" %-*s ", colWidths[i], valStr))
-			}
+			rowVals[i] = converters[i](values[i])
 		}
-		fmt.Fprintln(w, strings.Join(rowParts, "|"))
+		fmt.Fprintln(w, formatRow(rowVals, colWidths, isNumericCol))
 		rowCount++
 	}
 
@@ -710,6 +754,7 @@ func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.Col
 	} else {
 		fmt.Fprintf(w, "(%d rows)\n", rowCount)
 	}
+	fmt.Fprintln(w)
 	return nil
 }
 
@@ -721,7 +766,7 @@ func formatCSV(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.Colum
 
 	converters := make([]func(any) string, len(colTypes))
 	for i, ct := range colTypes {
-		converters[i] = buildStringConverter(ct)
+		converters[i] = buildStringConverter(ct, "")
 	}
 
 	scanArgs := make([]any, len(cols))
@@ -944,6 +989,7 @@ func main() {
 		file       string
 		format     string
 		outputPath string
+		psetOpt    string
 		timeout    time.Duration
 		verbose    bool
 	)
@@ -958,6 +1004,7 @@ func main() {
 	flag.StringVar(&query, "c", "", "SQL query to execute")
 	flag.StringVar(&file, "f", "", "Path to a file containing the SQL query")
 	flag.StringVar(&outputPath, "o", "", "Output file path (optional, defaults to stdout)")
+	flag.StringVar(&psetOpt, "P", "", "Set printing option VAR to ARG (e.g. -P null=STRING)")
 
 	// Format extensions (non-vsql flags)
 	flag.StringVar(&format, "format", "table", "Output format: table, json, csv, parquet")
@@ -1087,13 +1134,23 @@ func main() {
 	bufWriter := bufio.NewWriterSize(output, 65536)
 	defer bufWriter.Flush()
 
+	nullValue := ""
+	if psetOpt != "" {
+		parts := strings.SplitN(psetOpt, "=", 2)
+		if strings.EqualFold(parts[0], "null") {
+			if len(parts) == 2 {
+				nullValue = parts[1]
+			}
+		}
+	}
+
 	switch strings.ToLower(format) {
 	case "json":
 		err = formatJSON(bufWriter, cols, rows)
 	case "csv":
 		err = formatCSV(bufWriter, cols, rows, colTypes)
 	case "table":
-		err = formatTable(bufWriter, cols, rows, colTypes)
+		err = formatTable(bufWriter, cols, rows, colTypes, nullValue)
 	case "parquet":
 		err = formatParquet(bufWriter, cols, rows, colTypes)
 	default:

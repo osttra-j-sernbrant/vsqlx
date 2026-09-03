@@ -9,7 +9,7 @@ import (
 )
 
 func BenchmarkStringConverter_Float(b *testing.B) {
-	conv := buildStringConverter(nil)
+	conv := buildStringConverter(nil, "")
 	val := 123456.7890123
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -18,7 +18,7 @@ func BenchmarkStringConverter_Float(b *testing.B) {
 }
 
 func BenchmarkStringConverter_String(b *testing.B) {
-	conv := buildStringConverter(nil)
+	conv := buildStringConverter(nil, "")
 	val := "BNPP-CHINA-HQ-OFFICE"
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -27,7 +27,7 @@ func BenchmarkStringConverter_String(b *testing.B) {
 }
 
 func BenchmarkStringConverter_DateTime(b *testing.B) {
-	conv := buildStringConverter(nil)
+	conv := buildStringConverter(nil, "")
 	val := time.Now()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
