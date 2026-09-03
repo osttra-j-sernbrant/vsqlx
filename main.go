@@ -823,6 +823,10 @@ func main() {
 			fmt.Fprintln(os.Stderr, "Error: Connection attempt was canceled.")
 		} else if err == context.DeadlineExceeded || strings.Contains(err.Error(), "deadline exceeded") {
 			fmt.Fprintf(os.Stderr, "Error: Connection to Vertica timed out after %s.\n", timeout)
+		} else if err == io.EOF || strings.Contains(err.Error(), "EOF") {
+			fmt.Fprintln(os.Stderr, "Error: Failed to connect to Vertica: EOF. (Please verify your username, password, or host proxy settings as Vertica or the connection proxy will abruptly close the connection on authentication failure.)")
+		} else if strings.Contains(err.Error(), "28000") || strings.Contains(err.Error(), "Invalid username or password") || strings.Contains(err.Error(), "authentication failed") {
+			fmt.Fprintln(os.Stderr, "Error: Failed to connect to Vertica: Invalid username or password (SQLState 28000).")
 		} else {
 			fmt.Fprintf(os.Stderr, "Error: Failed to connect to Vertica: %v\n", err)
 		}
