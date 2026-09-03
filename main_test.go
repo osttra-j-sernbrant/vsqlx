@@ -204,3 +204,49 @@ func TestConvertSQLValueForParquet_NilColumnType(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatFloatVal(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    float64
+		expected string
+	}{
+		{"zero", 0.0, "0"},
+		{"normal positive", 123.456, "123.456"},
+		{"normal negative", -1138558.48868431, "-1138558.48868431"},
+		{"extreme large", -1.98e+126, "-1.98e+126"},
+		{"extreme small", 1.23e-06, "1.23e-06"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatFloatVal(tt.input)
+			if got != tt.expected {
+				t.Errorf("formatFloatVal(%v) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCenterString(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		width    int
+		expected string
+	}{
+		{"even padding", "test", 8, "  test  "},
+		{"odd padding extra right", "test", 7, " test  "},
+		{"no padding needed", "super-long-string", 5, "super-long-string"},
+		{"exact width", "test", 4, "test"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := centerString(tt.input, tt.width)
+			if got != tt.expected {
+				t.Errorf("centerString(%q, %d) = %q, want %q", tt.input, tt.width, got, tt.expected)
+			}
+		})
+	}
+}
