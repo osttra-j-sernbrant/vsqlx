@@ -565,48 +565,64 @@ func getPasswordFromPgpass(host, port, dbname, user string) (string, error) {
 	return "", fmt.Errorf("no matching entry found in %s", pgpassPath)
 }
 
+func centerString(s string, width int) string {
+	if len(s) >= width {
+		return s
+	}
+	leftPad := (width - len(s)) / 2
+	rightPad := width - len(s) - leftPad
+	return strings.Repeat(" ", leftPad) + s + strings.Repeat(" ", rightPad)
+}
+
 func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.ColumnType) error {
 	converters := make([]func(any) string, len(colTypes))
-	colWidths := make([]int, len(cols))
 	isNumericCol := make([]bool, len(cols))
 
 	for i, ct := range colTypes {
 		converters[i] = buildStringConverter(ct)
-
-		nameLen := len(ct.Name())
-		var typeWidth int
 		dbTypeName := strings.ToUpper(ct.DatabaseTypeName())
-
-		if strings.Contains(dbTypeName, "INT") {
-			typeWidth = 10
+		if strings.Contains(dbTypeName, "INT") || strings.Contains(dbTypeName, "FLOAT") || strings.Contains(dbTypeName, "DOUBLE") || strings.Contains(dbTypeName, "REAL") || strings.Contains(dbTypeName, "NUMERIC") || strings.Contains(dbTypeName, "DECIMAL") {
 			isNumericCol[i] = true
-		} else if strings.Contains(dbTypeName, "FLOAT") || strings.Contains(dbTypeName, "DOUBLE") || strings.Contains(dbTypeName, "REAL") || strings.Contains(dbTypeName, "NUMERIC") || strings.Contains(dbTypeName, "DECIMAL") {
-			typeWidth = 15
-			isNumericCol[i] = true
-		} else if strings.Contains(dbTypeName, "BOOL") {
-			typeWidth = 5
-		} else if strings.Contains(dbTypeName, "DATE") {
-			typeWidth = 10
-		} else if strings.Contains(dbTypeName, "TIME") || strings.Contains(dbTypeName, "TIMESTAMP") {
-			typeWidth = 19
-		} else {
-			if length, ok := ct.Length(); ok {
-				typeWidth = min(int(length), 20)
-			} else {
-				typeWidth = 12
-			}
 		}
-
-		colWidths[i] = max(nameLen, typeWidth)
 	}
 
+	// Buffer up to 10,000 rows to calculate exact, tight column widths matching only the output subset
+	const maxBufferRows = 10000
+	var bufferedRows [][]string
+	colWidths := make([]int, len(cols))
+	for i, col := range cols {
+		colWidths[i] = len(col)
+	}
+
+	scanArgs := make([]any, len(cols))
+	values := make([]any, len(cols))
+	for i := range values {
+		scanArgs[i] = &values[i]
+	}
+
+	rowCount := 0
+	for rows.Next() {
+		if err := rows.Scan(scanArgs...); err != nil {
+			return err
+		}
+		rowVals := make([]string, len(cols))
+		for i := range values {
+			strVal := converters[i](values[i])
+			rowVals[i] = strVal
+			colWidths[i] = max(colWidths[i], len(strVal))
+		}
+		bufferedRows = append(bufferedRows, rowVals)
+		rowCount++
+
+		if rowCount >= maxBufferRows {
+			break
+		}
+	}
+
+	// Print centered headers matching vsql perfectly
 	var headerParts []string
 	for i, col := range cols {
-		if isNumericCol[i] {
-			headerParts = append(headerParts, fmt.Sprintf(" %*s ", colWidths[i], col))
-		} else {
-			headerParts = append(headerParts, fmt.Sprintf(" %-*s ", colWidths[i], col))
-		}
+		headerParts = append(headerParts, fmt.Sprintf(" %s ", centerString(col, colWidths[i])))
 	}
 	fmt.Fprintln(w, strings.Join(headerParts, "|"))
 
@@ -616,13 +632,20 @@ func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.Col
 	}
 	fmt.Fprintln(w, strings.Join(dividerParts, "+"))
 
-	scanArgs := make([]any, len(cols))
-	values := make([]any, len(cols))
-	for i := range values {
-		scanArgs[i] = &values[i]
+	// Print buffered rows
+	for _, rowVals := range bufferedRows {
+		var rowParts []string
+		for i, valStr := range rowVals {
+			if isNumericCol[i] {
+				rowParts = append(rowParts, fmt.Sprintf(" %*s ", colWidths[i], valStr))
+			} else {
+				rowParts = append(rowParts, fmt.Sprintf(" %-*s ", colWidths[i], valStr))
+			}
+		}
+		fmt.Fprintln(w, strings.Join(rowParts, "|"))
 	}
 
-	rowCount := 0
+	// Stream any remaining rows dynamically using the calculated column widths
 	for rows.Next() {
 		if err := rows.Scan(scanArgs...); err != nil {
 			return err
