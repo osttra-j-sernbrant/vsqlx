@@ -687,11 +687,19 @@ func formatParquet(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.C
 func main() {
 	loadEnv()
 
+	currentUser := os.Getenv("USER")
+	if currentUser == "" {
+		currentUser = os.Getenv("USERNAME")
+	}
+	if currentUser == "" {
+		currentUser = "dbadmin"
+	}
+
 	defaultHost := os.Getenv("VERTICA_HOST")
 	if defaultHost == "" {
 		defaultHost = "localhost"
 	}
-	defaultPort := 5435
+	defaultPort := 5433
 	if portStr := os.Getenv("VERTICA_PORT"); portStr != "" {
 		if p, err := strconv.Atoi(portStr); err == nil {
 			defaultPort = p
@@ -699,12 +707,12 @@ func main() {
 	}
 	defaultUser := os.Getenv("VERTICA_USER")
 	if defaultUser == "" {
-		defaultUser = "triresolve2020q2"
+		defaultUser = currentUser
 	}
 	defaultPassword := os.Getenv("VERTICA_PASSWORD")
 	defaultDB := os.Getenv("VERTICA_DB")
 	if defaultDB == "" {
-		defaultDB = "dw"
+		defaultDB = currentUser
 	}
 	defaultTLSMode := os.Getenv("VERTICA_TLSMODE")
 	if defaultTLSMode == "" {
