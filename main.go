@@ -1007,18 +1007,27 @@ func main() {
 		}
 	}
 
+	// Wrap the output in a high-performance 64KB buffered writer to batch small text/CSV/JSON writes.
+	bufWriter := bufio.NewWriterSize(output, 65536)
+	defer bufWriter.Flush()
+
 	switch strings.ToLower(format) {
 	case "json":
-		err = formatJSON(output, cols, rows)
+		err = formatJSON(bufWriter, cols, rows)
 	case "csv":
-		err = formatCSV(output, cols, rows, colTypes)
+		err = formatCSV(bufWriter, cols, rows, colTypes)
 	case "table":
-		err = formatTable(output, cols, rows, colTypes)
+		err = formatTable(bufWriter, cols, rows, colTypes)
 	case "parquet":
-		err = formatParquet(output, cols, rows, colTypes)
+		err = formatParquet(bufWriter, cols, rows, colTypes)
 	default:
 		fmt.Fprintf(os.Stderr, "Error: Unknown format %q. Supported formats: table, json, csv, parquet\n", format)
 		os.Exit(1)
+	}
+
+	if err == nil {
+		// Flush immediately on success to ensure all bytes are written before checking errors or exiting
+		_ = bufWriter.Flush()
 	}
 
 	if err != nil {
