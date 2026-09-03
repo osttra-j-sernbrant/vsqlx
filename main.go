@@ -232,7 +232,7 @@ func buildConverter(ct *sql.ColumnType) func(any) any {
 				return i
 			}
 			rVal := reflect.ValueOf(val)
-			if rVal.Kind() == reflect.Ptr {
+			if rVal.Kind() == reflect.Pointer {
 				if rVal.IsNil() {
 					return nil
 				}
@@ -265,7 +265,7 @@ func buildConverter(ct *sql.ColumnType) func(any) any {
 				return f
 			}
 			rVal := reflect.ValueOf(val)
-			if rVal.Kind() == reflect.Ptr {
+			if rVal.Kind() == reflect.Pointer {
 				if rVal.IsNil() {
 					return nil
 				}
@@ -376,7 +376,7 @@ func buildConverter(ct *sql.ColumnType) func(any) any {
 				return i
 			}
 			rVal := reflect.ValueOf(val)
-			if rVal.Kind() == reflect.Ptr {
+			if rVal.Kind() == reflect.Pointer {
 				if rVal.IsNil() {
 					return nil
 				}
@@ -397,7 +397,7 @@ func buildConverter(ct *sql.ColumnType) func(any) any {
 				return int64(v)
 			}
 			rVal := reflect.ValueOf(val)
-			if rVal.Kind() == reflect.Ptr {
+			if rVal.Kind() == reflect.Pointer {
 				if rVal.IsNil() {
 					return nil
 				}
@@ -429,7 +429,7 @@ func buildConverter(ct *sql.ColumnType) func(any) any {
 				return f
 			}
 			rVal := reflect.ValueOf(val)
-			if rVal.Kind() == reflect.Ptr {
+			if rVal.Kind() == reflect.Pointer {
 				if rVal.IsNil() {
 					return nil
 				}
