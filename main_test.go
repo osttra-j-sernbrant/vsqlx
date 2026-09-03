@@ -70,7 +70,7 @@ func TestToString(t *testing.T) {
 		{[]byte("world"), "world"},
 		{123, "123"},
 		{true, "true"},
-		{now, now.Format("2006-01-02 15:04:05")},
+		{now, now.Format(time.DateTime)},
 	}
 
 	conv := buildStringConverter(nil)

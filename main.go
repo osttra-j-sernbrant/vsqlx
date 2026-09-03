@@ -94,7 +94,7 @@ func buildStringConverter(ct *sql.ColumnType) func(any) string {
 			case []byte:
 				return string(v)
 			case time.Time:
-				return v.Format("2006-01-02 15:04:05")
+				return v.Format(time.DateTime)
 			}
 			return fmt.Sprintf("%v", val)
 		}
@@ -109,16 +109,16 @@ func buildStringConverter(ct *sql.ColumnType) func(any) string {
 			}
 			switch v := val.(type) {
 			case time.Time:
-				return v.Format("2006-01-02")
+				return v.Format(time.DateOnly)
 			case string:
 				if t, err := time.Parse(time.RFC3339, v); err == nil {
-					return t.Format("2006-01-02")
+					return t.Format(time.DateOnly)
 				}
 				return v
 			case []byte:
 				s := string(v)
 				if t, err := time.Parse(time.RFC3339, s); err == nil {
-					return t.Format("2006-01-02")
+					return t.Format(time.DateOnly)
 				}
 				return s
 			}
@@ -133,16 +133,16 @@ func buildStringConverter(ct *sql.ColumnType) func(any) string {
 			}
 			switch v := val.(type) {
 			case time.Time:
-				return v.Format("2006-01-02 15:04:05")
+				return v.Format(time.DateTime)
 			case string:
 				if t, err := time.Parse(time.RFC3339, v); err == nil {
-					return t.Format("2006-01-02 15:04:05")
+					return t.Format(time.DateTime)
 				}
 				return v
 			case []byte:
 				s := string(v)
 				if t, err := time.Parse(time.RFC3339, s); err == nil {
-					return t.Format("2006-01-02 15:04:05")
+					return t.Format(time.DateTime)
 				}
 				return s
 			}
@@ -162,7 +162,7 @@ func buildStringConverter(ct *sql.ColumnType) func(any) string {
 		case []byte:
 			return string(v)
 		case time.Time:
-			return v.Format("2006-01-02 15:04:05")
+			return v.Format(time.DateTime)
 		}
 		return fmt.Sprintf("%v", val)
 	}
@@ -871,7 +871,7 @@ func main() {
 
 	// Format extensions (non-vsql flags)
 	flag.StringVar(&format, "format", "table", "Output format: table, json, csv, parquet")
-	flag.DurationVar(&timeout, "timeout", 30*time.Second, "Query timeout duration")
+	flag.DurationVar(&timeout, "timeout", 5*time.Minute, "Query timeout duration")
 	flag.BoolVar(&verbose, "verbose", false, "Enable verbose driver warning and error logs")
 	flag.BoolVar(&verbose, "v", false, "Enable verbose driver warning and error logs (shorthand)")
 
