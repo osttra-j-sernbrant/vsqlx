@@ -20,7 +20,13 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 	_ "github.com/vertica/vertica-sql-go"
+	vlogger "github.com/vertica/vertica-sql-go/logger"
 )
+
+func init() {
+	// Silence non-critical driver warning messages (like late-arriving packets after cancellation)
+	vlogger.SetLogLevel(vlogger.ERROR)
+}
 
 func loadEnv() {
 	file, err := os.Open(".env")
@@ -717,6 +723,7 @@ func main() {
 		format     string
 		outputPath string
 		timeout    time.Duration
+		verbose    bool
 	)
 
 	// Connection options (compatible with vsql)
@@ -751,8 +758,13 @@ func main() {
 	// Format extensions
 	flag.StringVar(&format, "format", "table", "Output format: table, json, csv, parquet")
 	flag.DurationVar(&timeout, "timeout", 30*time.Second, "Query timeout duration")
+	flag.BoolVar(&verbose, "verbose", false, "Enable verbose driver warning and error logs")
 
 	flag.Parse()
+
+	if verbose {
+		vlogger.SetLogLevel(vlogger.WARN)
+	}
 
 	var queryStr string
 	if query != "" {
@@ -799,13 +811,25 @@ func main() {
 	defer cancel()
 
 	if err := db.PingContext(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: Failed to connect to Vertica: %v\n", err)
+		if err == context.Canceled || strings.Contains(err.Error(), "canceled") {
+			fmt.Fprintln(os.Stderr, "Error: Connection attempt was canceled.")
+		} else if err == context.DeadlineExceeded || strings.Contains(err.Error(), "deadline exceeded") {
+			fmt.Fprintf(os.Stderr, "Error: Connection to Vertica timed out after %s.\n", timeout)
+		} else {
+			fmt.Fprintf(os.Stderr, "Error: Failed to connect to Vertica: %v\n", err)
+		}
 		os.Exit(1)
 	}
 
 	rows, err := db.QueryContext(ctx, queryStr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: Query failed: %v\n", err)
+		if err == context.Canceled || strings.Contains(err.Error(), "canceled") {
+			fmt.Fprintln(os.Stderr, "Error: Query was canceled.")
+		} else if err == context.DeadlineExceeded || strings.Contains(err.Error(), "deadline exceeded") {
+			fmt.Fprintf(os.Stderr, "Error: Query execution timed out after %s.\n", timeout)
+		} else {
+			fmt.Fprintf(os.Stderr, "Error: Query failed: %v\n", err)
+		}
 		os.Exit(1)
 	}
 	defer rows.Close()
@@ -854,7 +878,13 @@ func main() {
 	}
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: Failed to format output: %v\n", err)
+		if err == context.Canceled || strings.Contains(err.Error(), "canceled") {
+			fmt.Fprintln(os.Stderr, "Error: Query was canceled.")
+		} else if err == context.DeadlineExceeded || strings.Contains(err.Error(), "deadline exceeded") {
+			fmt.Fprintf(os.Stderr, "Error: Query timed out after %s.\n", timeout)
+		} else {
+			fmt.Fprintf(os.Stderr, "Error: Failed to format output: %v\n", err)
+		}
 		os.Exit(1)
 	}
 }
