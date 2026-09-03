@@ -567,15 +567,61 @@ func getPasswordFromPgpass(host, port, dbname, user string) (string, error) {
 
 func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.ColumnType) error {
 	converters := make([]func(any) string, len(colTypes))
+	colWidths := make([]int, len(cols))
+	isNumericCol := make([]bool, len(cols))
+
 	for i, ct := range colTypes {
 		converters[i] = buildStringConverter(ct)
+
+		nameLen := len(ct.Name())
+		typeWidth := 10
+		dbTypeName := strings.ToUpper(ct.DatabaseTypeName())
+
+		if strings.Contains(dbTypeName, "INT") {
+			typeWidth = 10
+			isNumericCol[i] = true
+		} else if strings.Contains(dbTypeName, "FLOAT") || strings.Contains(dbTypeName, "DOUBLE") || strings.Contains(dbTypeName, "REAL") || strings.Contains(dbTypeName, "NUMERIC") || strings.Contains(dbTypeName, "DECIMAL") {
+			typeWidth = 15
+			isNumericCol[i] = true
+		} else if strings.Contains(dbTypeName, "BOOL") {
+			typeWidth = 5
+		} else if strings.Contains(dbTypeName, "DATE") {
+			typeWidth = 10
+		} else if strings.Contains(dbTypeName, "TIME") || strings.Contains(dbTypeName, "TIMESTAMP") {
+			typeWidth = 19
+		} else {
+			if length, ok := ct.Length(); ok {
+				typeWidth = int(length)
+				if typeWidth > 20 {
+					typeWidth = 20
+				}
+			} else {
+				typeWidth = 12
+			}
+		}
+
+		if nameLen > typeWidth {
+			colWidths[i] = nameLen
+		} else {
+			colWidths[i] = typeWidth
+		}
 	}
 
-	var bufferedRows [][]string
-	colWidths := make([]int, len(cols))
+	var headerParts []string
 	for i, col := range cols {
-		colWidths[i] = len(col)
+		if isNumericCol[i] {
+			headerParts = append(headerParts, fmt.Sprintf(" %*s ", colWidths[i], col))
+		} else {
+			headerParts = append(headerParts, fmt.Sprintf(" %-*s ", colWidths[i], col))
+		}
 	}
+	fmt.Fprintln(w, strings.Join(headerParts, "|"))
+
+	var dividerParts []string
+	for _, width := range colWidths {
+		dividerParts = append(dividerParts, strings.Repeat("-", width+2))
+	}
+	fmt.Fprintln(w, strings.Join(dividerParts, "+"))
 
 	scanArgs := make([]any, len(cols))
 	values := make([]any, len(cols))
@@ -588,48 +634,18 @@ func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.Col
 		if err := rows.Scan(scanArgs...); err != nil {
 			return err
 		}
-		rowVals := make([]string, len(cols))
-		for i := range values {
-			strVal := converters[i](values[i])
-			rowVals[i] = strVal
-			if len(strVal) > colWidths[i] {
-				colWidths[i] = len(strVal)
-			}
-		}
-		bufferedRows = append(bufferedRows, rowVals)
-		rowCount++
-	}
 
-	var headerParts []string
-	for i, col := range cols {
-		headerParts = append(headerParts, fmt.Sprintf(" %-*s ", colWidths[i], col))
-	}
-	fmt.Fprintln(w, strings.Join(headerParts, "|"))
-
-	var dividerParts []string
-	for _, width := range colWidths {
-		dividerParts = append(dividerParts, strings.Repeat("-", width+2))
-	}
-	fmt.Fprintln(w, strings.Join(dividerParts, "+"))
-
-	for _, rowVals := range bufferedRows {
 		var rowParts []string
-		for i, val := range rowVals {
-			isNumeric := false
-			if i < len(colTypes) {
-				dbTypeName := strings.ToUpper(colTypes[i].DatabaseTypeName())
-				if strings.Contains(dbTypeName, "INT") || strings.Contains(dbTypeName, "FLOAT") || strings.Contains(dbTypeName, "DOUBLE") || strings.Contains(dbTypeName, "REAL") || strings.Contains(dbTypeName, "NUMERIC") || strings.Contains(dbTypeName, "DECIMAL") {
-					isNumeric = true
-				}
-			}
-
-			if isNumeric {
-				rowParts = append(rowParts, fmt.Sprintf(" %*s ", colWidths[i], val))
+		for i := range values {
+			valStr := converters[i](values[i])
+			if isNumericCol[i] {
+				rowParts = append(rowParts, fmt.Sprintf(" %*s ", colWidths[i], valStr))
 			} else {
-				rowParts = append(rowParts, fmt.Sprintf(" %-*s ", colWidths[i], val))
+				rowParts = append(rowParts, fmt.Sprintf(" %-*s ", colWidths[i], valStr))
 			}
 		}
 		fmt.Fprintln(w, strings.Join(rowParts, "|"))
+		rowCount++
 	}
 
 	fmt.Fprintf(w, "(%d rows)\n", rowCount)
