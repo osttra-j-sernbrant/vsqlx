@@ -60,7 +60,8 @@ func TestBuildDSN(t *testing.T) {
 }
 
 func TestToString(t *testing.T) {
-	now := time.Now()
+	nowExact := time.Date(2026, 9, 3, 23, 30, 45, 0, time.UTC)
+	nowFrac := time.Date(2026, 9, 3, 23, 30, 45, 123456000, time.UTC)
 	tests := []struct {
 		input    any
 		expected string
@@ -70,7 +71,8 @@ func TestToString(t *testing.T) {
 		{[]byte("world"), "world"},
 		{123, "123"},
 		{true, "true"},
-		{now, now.Format(time.DateTime)},
+		{nowExact, "2026-09-03 23:30:45"},
+		{nowFrac, "2026-09-03 23:30:45.123456"},
 	}
 
 	conv := buildStringConverter(nil)
@@ -79,6 +81,34 @@ func TestToString(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("buildStringConverter(nil)(%v) = %q, want %q", tt.input, got, tt.expected)
 		}
+	}
+}
+
+func TestFormatTimeVal(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    time.Time
+		expected string
+	}{
+		{
+			name:     "round second",
+			input:    time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC),
+			expected: "2026-09-03 12:00:00",
+		},
+		{
+			name:     "microseconds",
+			input:    time.Date(2026, 9, 3, 12, 0, 0, 481973000, time.UTC),
+			expected: "2026-09-03 12:00:00.481973",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatTimeVal(tt.input)
+			if got != tt.expected {
+				t.Errorf("formatTimeVal(%v) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
 	}
 }
 

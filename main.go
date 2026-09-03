@@ -92,6 +92,13 @@ func formatFloatVal(v float64) string {
 	return strconv.FormatFloat(v, 'f', -1, 64)
 }
 
+func formatTimeVal(t time.Time) string {
+	if t.Nanosecond() == 0 {
+		return t.Format(time.DateTime)
+	}
+	return t.Format("2006-01-02 15:04:05.999999")
+}
+
 func buildStringConverter(ct *sql.ColumnType) func(any) string {
 	if ct == nil {
 		return func(val any) string {
@@ -106,7 +113,7 @@ func buildStringConverter(ct *sql.ColumnType) func(any) string {
 			case []byte:
 				return string(v)
 			case time.Time:
-				return v.Format(time.DateTime)
+				return formatTimeVal(v)
 			}
 			return fmt.Sprintf("%v", val)
 		}
@@ -145,16 +152,34 @@ func buildStringConverter(ct *sql.ColumnType) func(any) string {
 			}
 			switch v := val.(type) {
 			case time.Time:
-				return v.Format(time.DateTime)
+				return formatTimeVal(v)
 			case string:
+				if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+					return formatTimeVal(t)
+				}
 				if t, err := time.Parse(time.RFC3339, v); err == nil {
-					return t.Format(time.DateTime)
+					return formatTimeVal(t)
+				}
+				if t, err := time.Parse("2006-01-02 15:04:05.999999", v); err == nil {
+					return formatTimeVal(t)
+				}
+				if t, err := time.Parse(time.DateTime, v); err == nil {
+					return formatTimeVal(t)
 				}
 				return v
 			case []byte:
 				s := string(v)
+				if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+					return formatTimeVal(t)
+				}
 				if t, err := time.Parse(time.RFC3339, s); err == nil {
-					return t.Format(time.DateTime)
+					return formatTimeVal(t)
+				}
+				if t, err := time.Parse("2006-01-02 15:04:05.999999", s); err == nil {
+					return formatTimeVal(t)
+				}
+				if t, err := time.Parse(time.DateTime, s); err == nil {
+					return formatTimeVal(t)
 				}
 				return s
 			}
@@ -174,7 +199,7 @@ func buildStringConverter(ct *sql.ColumnType) func(any) string {
 		case []byte:
 			return string(v)
 		case time.Time:
-			return v.Format(time.DateTime)
+			return formatTimeVal(v)
 		}
 		return fmt.Sprintf("%v", val)
 	}
@@ -680,7 +705,11 @@ func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.Col
 		return err
 	}
 
-	fmt.Fprintf(w, "(%d rows)\n", rowCount)
+	if rowCount == 1 {
+		fmt.Fprintln(w, "(1 row)")
+	} else {
+		fmt.Fprintf(w, "(%d rows)\n", rowCount)
+	}
 	return nil
 }
 
