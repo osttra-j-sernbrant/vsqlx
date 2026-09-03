@@ -676,6 +676,10 @@ func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.Col
 		rowCount++
 	}
 
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
 	fmt.Fprintf(w, "(%d rows)\n", rowCount)
 	return nil
 }
@@ -709,6 +713,11 @@ func formatCSV(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.Colum
 			return err
 		}
 	}
+
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
 	cw.Flush()
 	return cw.Error()
 }
@@ -730,6 +739,10 @@ func formatJSON(w io.Writer, cols []string, rows *sql.Rows) error {
 			rowMap[col] = toJSONValue(values[i])
 		}
 		results = append(results, rowMap)
+	}
+
+	if err := rows.Err(); err != nil {
+		return err
 	}
 
 	if results == nil {
@@ -841,6 +854,10 @@ func formatParquet(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.C
 			}
 			batch = batch[:0]
 		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return err
 	}
 
 	if len(batch) > 0 {
