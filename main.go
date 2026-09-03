@@ -1,0 +1,651 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"database/sql"
+	"encoding/csv"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"net/url"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strconv"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"github.com/parquet-go/parquet-go"
+	_ "github.com/vertica/vertica-sql-go"
+)
+
+func loadEnv() {
+	file, err := os.Open(".env")
+	if err != nil {
+		return
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+
+		if strings.HasPrefix(val, "\"") && strings.HasSuffix(val, "\"") {
+			val = val[1 : len(val)-1]
+		} else if strings.HasPrefix(val, "'") && strings.HasSuffix(val, "'") {
+			val = val[1 : len(val)-1]
+		}
+
+		if os.Getenv(key) == "" {
+			os.Setenv(key, val)
+		}
+	}
+}
+
+func buildDSN(host string, port int, user, password, db, tlsMode string) string {
+	queryParams := url.Values{}
+	queryParams.Add("tlsmode", tlsMode)
+
+	var userInfo *url.Userinfo
+	if password != "" {
+		userInfo = url.UserPassword(user, password)
+	} else {
+		userInfo = url.User(user)
+	}
+
+	u := url.URL{
+		Scheme:   "vertica",
+		User:     userInfo,
+		Host:     fmt.Sprintf("%s:%d", host, port),
+		Path:     db,
+		RawQuery: queryParams.Encode(),
+	}
+	return u.String()
+}
+
+func toString(val interface{}) string {
+	if val == nil {
+		return "NULL"
+	}
+	switch v := val.(type) {
+	case []byte:
+		return string(v)
+	case string:
+		return v
+	case time.Time:
+		return v.Format(time.RFC3339)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+func toJSONValue(val interface{}) interface{} {
+	if val == nil {
+		return nil
+	}
+	switch v := val.(type) {
+	case []byte:
+		return string(v)
+	case time.Time:
+		return v.Format(time.RFC3339)
+	default:
+		return v
+	}
+}
+
+func buildConverter(ct *sql.ColumnType) func(any) any {
+	if ct == nil || ct.ScanType() == nil {
+		return func(val any) any {
+			if val == nil {
+				return nil
+			}
+			if b, ok := val.([]byte); ok {
+				return string(b)
+			}
+			return val
+		}
+	}
+
+	kind := ct.ScanType().Kind()
+	scanTypeStr := ct.ScanType().String()
+
+	switch kind {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return func(val any) any {
+			if val == nil {
+				return nil
+			}
+			switch v := val.(type) {
+			case int64:
+				return v
+			case int:
+				return int64(v)
+			case sql.NullInt64:
+				if v.Valid {
+					return v.Int64
+				}
+				return nil
+			case []byte:
+				i, _ := strconv.ParseInt(string(v), 10, 64)
+				return i
+			case string:
+				i, _ := strconv.ParseInt(v, 10, 64)
+				return i
+			}
+			rVal := reflect.ValueOf(val)
+			if rVal.Kind() == reflect.Ptr {
+				if rVal.IsNil() {
+					return nil
+				}
+				return reflect.Indirect(rVal).Convert(reflect.TypeOf(int64(0))).Interface()
+			}
+			return rVal.Convert(reflect.TypeOf(int64(0))).Interface()
+		}
+
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return func(val any) any {
+			if val == nil {
+				return nil
+			}
+			switch v := val.(type) {
+			case uint64:
+				return int64(v)
+			case uint:
+				return int64(v)
+			}
+			rVal := reflect.ValueOf(val)
+			if rVal.Kind() == reflect.Ptr {
+				if rVal.IsNil() {
+					return nil
+				}
+				return reflect.Indirect(rVal).Convert(reflect.TypeOf(int64(0))).Interface()
+			}
+			return rVal.Convert(reflect.TypeOf(int64(0))).Interface()
+		}
+
+	case reflect.Float32, reflect.Float64:
+		return func(val any) any {
+			if val == nil {
+				return nil
+			}
+			switch v := val.(type) {
+			case float64:
+				return v
+			case float32:
+				return float64(v)
+			case sql.NullFloat64:
+				if v.Valid {
+					return v.Float64
+				}
+				return nil
+			case []byte:
+				f, _ := strconv.ParseFloat(string(v), 64)
+				return f
+			case string:
+				f, _ := strconv.ParseFloat(v, 64)
+				return f
+			}
+			rVal := reflect.ValueOf(val)
+			if rVal.Kind() == reflect.Ptr {
+				if rVal.IsNil() {
+					return nil
+				}
+				return reflect.Indirect(rVal).Convert(reflect.TypeOf(float64(0.0))).Interface()
+			}
+			return rVal.Convert(reflect.TypeOf(float64(0.0))).Interface()
+		}
+
+	case reflect.Bool:
+		return func(val any) any {
+			if val == nil {
+				return nil
+			}
+			switch v := val.(type) {
+			case bool:
+				return v
+			case sql.NullBool:
+				if v.Valid {
+					return v.Bool
+				}
+				return nil
+			case int64:
+				return v != 0
+			case int:
+				return v != 0
+			case string:
+				b, _ := strconv.ParseBool(v)
+				return b
+			case []byte:
+				b, _ := strconv.ParseBool(string(v))
+				return b
+			}
+			return false
+		}
+
+	case reflect.Struct:
+		if scanTypeStr == "time.Time" {
+			return func(val any) any {
+				if val == nil {
+					return nil
+				}
+				switch v := val.(type) {
+				case time.Time:
+					return v
+				case sql.NullTime:
+					if v.Valid {
+						return v.Time
+					}
+					return nil
+				case string:
+					if t, err := time.Parse(time.RFC3339, v); err == nil {
+						return t
+					}
+				case []byte:
+					if t, err := time.Parse(time.RFC3339, string(v)); err == nil {
+						return t
+					}
+				}
+				return nil
+			}
+		}
+		fallthrough
+
+	default:
+		return func(val any) any {
+			if val == nil {
+				return nil
+			}
+			switch v := val.(type) {
+			case string:
+				return v
+			case []byte:
+				return string(v)
+			case sql.NullString:
+				if v.Valid {
+					return v.String
+				}
+				return nil
+			}
+			return fmt.Sprintf("%v", val)
+		}
+	}
+}
+
+func readSQLFile(path string) (string, error) {
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return string(bytes), nil
+}
+
+func readStdin() (string, error) {
+	stat, _ := os.Stdin.Stat()
+	if (stat.Mode() & os.ModeCharDevice) != 0 {
+		return "", nil
+	}
+	bytes, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return "", err
+	}
+	return string(bytes), nil
+}
+
+func getPasswordFromPgpass(host, port, dbname, user string) (string, error) {
+	pgpassPath := os.Getenv("PGPASSFILE")
+	if pgpassPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		pgpassPath = filepath.Join(home, ".pgpass")
+	}
+
+	file, err := os.Open(pgpassPath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		parts := strings.SplitN(line, ":", 5)
+		if len(parts) != 5 {
+			continue
+		}
+
+		match := func(val, pattern string) bool {
+			return pattern == "*" || val == pattern
+		}
+
+		if match(host, parts[0]) && match(port, parts[1]) && match(dbname, parts[2]) && match(user, parts[3]) {
+			password := parts[4]
+			password = strings.ReplaceAll(password, `\:`, ":")
+			password = strings.ReplaceAll(password, `\\`, `\`)
+			return password, nil
+		}
+	}
+
+	return "", fmt.Errorf("no matching entry found in %s", pgpassPath)
+}
+
+func formatTable(w io.Writer, cols []string, rows *sql.Rows) error {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, strings.Join(cols, "\t"))
+
+	scanArgs := make([]interface{}, len(cols))
+	values := make([]interface{}, len(cols))
+	for i := range values {
+		scanArgs[i] = &values[i]
+	}
+
+	for rows.Next() {
+		if err := rows.Scan(scanArgs...); err != nil {
+			return err
+		}
+		var rowVals []string
+		for _, val := range values {
+			rowVals = append(rowVals, toString(val))
+		}
+		fmt.Fprintln(tw, strings.Join(rowVals, "\t"))
+	}
+	return tw.Flush()
+}
+
+func formatCSV(w io.Writer, cols []string, rows *sql.Rows) error {
+	cw := csv.NewWriter(w)
+	if err := cw.Write(cols); err != nil {
+		return err
+	}
+
+	scanArgs := make([]interface{}, len(cols))
+	values := make([]interface{}, len(cols))
+	for i := range values {
+		scanArgs[i] = &values[i]
+	}
+
+	for rows.Next() {
+		if err := rows.Scan(scanArgs...); err != nil {
+			return err
+		}
+		var rowVals []string
+		for _, val := range values {
+			rowVals = append(rowVals, toString(val))
+		}
+		if err := cw.Write(rowVals); err != nil {
+			return err
+		}
+	}
+	cw.Flush()
+	return cw.Error()
+}
+
+func formatJSON(w io.Writer, cols []string, rows *sql.Rows) error {
+	scanArgs := make([]interface{}, len(cols))
+	values := make([]interface{}, len(cols))
+	for i := range values {
+		scanArgs[i] = &values[i]
+	}
+
+	var results []map[string]interface{}
+	for rows.Next() {
+		if err := rows.Scan(scanArgs...); err != nil {
+			return err
+		}
+		rowMap := make(map[string]interface{})
+		for i, col := range cols {
+			rowMap[col] = toJSONValue(values[i])
+		}
+		results = append(results, rowMap)
+	}
+
+	if results == nil {
+		results = []map[string]interface{}{}
+	}
+
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(results)
+}
+
+func formatParquet(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.ColumnType) error {
+	group := parquet.Group{}
+	for _, ct := range colTypes {
+		var node parquet.Node
+		if ct.ScanType() != nil {
+			switch ct.ScanType().Kind() {
+			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+				reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+				node = parquet.Int(64)
+			case reflect.Float32, reflect.Float64:
+				node = parquet.Leaf(parquet.DoubleType)
+			case reflect.Bool:
+				node = parquet.Leaf(parquet.BooleanType)
+			case reflect.Struct:
+				if ct.ScanType().String() == "time.Time" {
+					node = parquet.Timestamp(parquet.Microsecond)
+				} else {
+					node = parquet.String()
+				}
+			default:
+				node = parquet.String()
+			}
+		} else {
+			node = parquet.String()
+		}
+		group[ct.Name()] = parquet.Optional(node)
+	}
+
+	schema := parquet.NewSchema("query_results", group)
+
+	writer := parquet.NewGenericWriter[any](w, schema)
+	defer writer.Close()
+
+	// Pre-compile column converters to avoid reflection inside the loop
+	converters := make([]func(any) any, len(colTypes))
+	for i, ct := range colTypes {
+		converters[i] = buildConverter(ct)
+	}
+
+	scanArgs := make([]any, len(cols))
+	values := make([]any, len(cols))
+	for i := range values {
+		scanArgs[i] = &values[i]
+	}
+
+	var batch []any
+	for rows.Next() {
+		if err := rows.Scan(scanArgs...); err != nil {
+			return err
+		}
+
+		rowMap := make(map[string]any)
+		for i, ct := range colTypes {
+			rowMap[ct.Name()] = converters[i](values[i])
+		}
+		batch = append(batch, rowMap)
+
+		if len(batch) >= 10000 {
+			if _, err := writer.Write(batch); err != nil {
+				return err
+			}
+			batch = batch[:0]
+		}
+	}
+
+	if len(batch) > 0 {
+		if _, err := writer.Write(batch); err != nil {
+			return err
+		}
+	}
+
+	return writer.Close()
+}
+
+func main() {
+	loadEnv()
+
+	defaultHost := os.Getenv("VERTICA_HOST")
+	if defaultHost == "" {
+		defaultHost = "localhost"
+	}
+	defaultPort := 5435
+	if portStr := os.Getenv("VERTICA_PORT"); portStr != "" {
+		if p, err := strconv.Atoi(portStr); err == nil {
+			defaultPort = p
+		}
+	}
+	defaultUser := os.Getenv("VERTICA_USER")
+	if defaultUser == "" {
+		defaultUser = "triresolve2020q2"
+	}
+	defaultPassword := os.Getenv("VERTICA_PASSWORD")
+	defaultDB := os.Getenv("VERTICA_DB")
+	if defaultDB == "" {
+		defaultDB = "dw"
+	}
+	defaultTLSMode := os.Getenv("VERTICA_TLSMODE")
+	if defaultTLSMode == "" {
+		defaultTLSMode = "prefer"
+	}
+
+	hostFlag := flag.String("host", defaultHost, "Vertica host")
+	portFlag := flag.Int("port", defaultPort, "Vertica port")
+	userFlag := flag.String("user", defaultUser, "Vertica user")
+	passwordFlag := flag.String("password", defaultPassword, "Vertica password")
+	dbFlag := flag.String("db", defaultDB, "Vertica database name")
+	tlsModeFlag := flag.String("tlsmode", defaultTLSMode, "Vertica TLS mode (prefer, server, none)")
+
+	queryFlag := flag.String("query", "", "SQL query to execute")
+	fileFlag := flag.String("file", "", "Path to a file containing the SQL query")
+	formatFlag := flag.String("format", "table", "Output format: table, json, csv, parquet")
+
+	var outputPath string
+	flag.StringVar(&outputPath, "output", "", "Output file path (optional, defaults to stdout)")
+	flag.StringVar(&outputPath, "o", "", "Output file path (optional, defaults to stdout) (shorthand)")
+
+	timeoutFlag := flag.Duration("timeout", 30*time.Second, "Query timeout duration")
+
+	flag.Parse()
+
+	var query string
+	if *queryFlag != "" {
+		query = *queryFlag
+	} else if *fileFlag != "" {
+		var err error
+		query, err = readSQLFile(*fileFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: Failed to read SQL file: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		var err error
+		query, err = readStdin()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: Failed to read from stdin: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	query = strings.TrimSpace(query)
+	if query == "" {
+		fmt.Fprintln(os.Stderr, "Error: No query provided. Use -query, -file, or pipe a query to stdin.")
+		os.Exit(1)
+	}
+
+	password := *passwordFlag
+	if password == "" {
+		if pass, err := getPasswordFromPgpass(*hostFlag, strconv.Itoa(*portFlag), *dbFlag, *userFlag); err == nil {
+			password = pass
+		}
+	}
+
+	dsn := buildDSN(*hostFlag, *portFlag, *userFlag, password, *dbFlag, *tlsModeFlag)
+
+	db, err := sql.Open("vertica", dsn)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Failed to open connection: %v\n", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), *timeoutFlag)
+	defer cancel()
+
+	if err := db.PingContext(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Failed to connect to Vertica: %v\n", err)
+		os.Exit(1)
+	}
+
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Query failed: %v\n", err)
+		os.Exit(1)
+	}
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Failed to get columns: %v\n", err)
+		os.Exit(1)
+	}
+
+	colTypes, err := rows.ColumnTypes()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Failed to get column types: %v\n", err)
+		os.Exit(1)
+	}
+
+	var output io.Writer = os.Stdout
+	if outputPath != "" {
+		file, err := os.Create(outputPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: Failed to create output file: %v\n", err)
+			os.Exit(1)
+		}
+		defer file.Close()
+		output = file
+	} else if strings.ToLower(*formatFlag) == "parquet" {
+		stat, _ := os.Stdout.Stat()
+		if (stat.Mode() & os.ModeCharDevice) != 0 {
+			fmt.Fprintln(os.Stderr, "Error: Writing binary Parquet data to a terminal is not allowed. Please specify an output file with -output (-o) or redirect stdout.")
+			os.Exit(1)
+		}
+	}
+
+	switch strings.ToLower(*formatFlag) {
+	case "json":
+		err = formatJSON(output, cols, rows)
+	case "csv":
+		err = formatCSV(output, cols, rows)
+	case "table":
+		err = formatTable(output, cols, rows)
+	case "parquet":
+		err = formatParquet(output, cols, rows, colTypes)
+	default:
+		fmt.Fprintf(os.Stderr, "Error: Unknown format %q. Supported formats: table, json, csv, parquet\n", *formatFlag)
+		os.Exit(1)
+	}
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Failed to format output: %v\n", err)
+		os.Exit(1)
+	}
+}
