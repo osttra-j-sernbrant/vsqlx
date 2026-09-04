@@ -304,32 +304,40 @@ func TestGetVersion(t *testing.T) {
 
 func TestParsePsetOptions(t *testing.T) {
 	tests := []struct {
-		name              string
-		opt               string
-		initialNull       string
-		initialTuples     bool
-		expectedNull      string
-		expectedTuples    bool
+		name             string
+		opt              string
+		initialNull      string
+		initialTuples    bool
+		initialExpanded  bool
+		expectedNull     string
+		expectedTuples   bool
+		expectedExpanded bool
 	}{
-		{"empty", "", "", false, "", false},
-		{"null only", "null=(null)", "", false, "(null)", false},
-		{"tuples_only bare flag", "tuples_only", "", false, "", true},
-		{"tuples_only=on", "tuples_only=on", "", false, "", true},
-		{"tuples_only=1", "tuples_only=1", "", false, "", true},
-		{"tuples_only=off", "tuples_only=off", "", true, "", false},
-		{"tuples_only=false", "tuples_only=false", "", true, "", false},
-		{"combined null and tuples_only", "null=NULL,tuples_only=on", "", false, "NULL", true},
-		{"preserve initial tuples_only when only null is set", "null=NA", "", true, "NA", true},
+		{"empty", "", "", false, false, "", false, false},
+		{"null only", "null=(null)", "", false, false, "(null)", false, false},
+		{"tuples_only bare flag", "tuples_only", "", false, false, "", true, false},
+		{"tuples_only=on", "tuples_only=on", "", false, false, "", true, false},
+		{"tuples_only=1", "tuples_only=1", "", false, false, "", true, false},
+		{"tuples_only=off", "tuples_only=off", "", true, false, "", false, false},
+		{"tuples_only=false", "tuples_only=false", "", true, false, "", false, false},
+		{"expanded bare flag", "expanded", "", false, false, "", false, true},
+		{"expanded=on", "expanded=on", "", false, false, "", false, true},
+		{"expanded=off", "expanded=off", "", false, true, "", false, false},
+		{"combined null, tuples_only and expanded", "null=NULL,tuples_only=on,expanded=on", "", false, false, "NULL", true, true},
+		{"preserve initial flags when only null is set", "null=NA", "", true, true, "NA", true, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotNull, gotTuples := parsePsetOptions(tt.opt, tt.initialNull, tt.initialTuples)
+			gotNull, gotTuples, gotExpanded := parsePsetOptions(tt.opt, tt.initialNull, tt.initialTuples, tt.initialExpanded)
 			if gotNull != tt.expectedNull {
 				t.Errorf("parsePsetOptions() null = %q, want %q", gotNull, tt.expectedNull)
 			}
 			if gotTuples != tt.expectedTuples {
 				t.Errorf("parsePsetOptions() tuplesOnly = %v, want %v", gotTuples, tt.expectedTuples)
+			}
+			if gotExpanded != tt.expectedExpanded {
+				t.Errorf("parsePsetOptions() expanded = %v, want %v", gotExpanded, tt.expectedExpanded)
 			}
 		})
 	}

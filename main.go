@@ -775,6 +775,108 @@ func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.Col
 	return nil
 }
 
+func formatExpanded(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.ColumnType, nullValue string, tuplesOnly bool) error {
+	converters := make([]func(any) string, len(colTypes))
+	for i, ct := range colTypes {
+		converters[i] = buildStringConverter(ct, nullValue)
+	}
+
+	maxColLen := 0
+	for _, col := range cols {
+		if len(col) > maxColLen {
+			maxColLen = len(col)
+		}
+	}
+
+	const maxBufferRows = 10000
+	var bufferedRows [][]string
+	maxValLen := 0
+
+	scanArgs := make([]any, len(cols))
+	values := make([]any, len(cols))
+	for i := range values {
+		scanArgs[i] = &values[i]
+	}
+
+	rowCount := 0
+	for rows.Next() {
+		if err := rows.Scan(scanArgs...); err != nil {
+			return err
+		}
+		rowVals := make([]string, len(cols))
+		for i := range values {
+			strVal := converters[i](values[i])
+			rowVals[i] = strVal
+			lines := strings.Split(strVal, "\n")
+			for _, l := range lines {
+				if len(l) > maxValLen {
+					maxValLen = len(l)
+				}
+			}
+		}
+		bufferedRows = append(bufferedRows, rowVals)
+		rowCount++
+
+		if rowCount >= maxBufferRows {
+			break
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if rowCount == 0 {
+		fmt.Fprintln(w, "(No rows)")
+		fmt.Fprintln(w)
+		return nil
+	}
+
+	totalMaxWidth := maxColLen + 3 + maxValLen
+	tuplesSeparator := fmt.Sprintf("%s+%s", strings.Repeat("-", maxColLen+1), strings.Repeat("-", maxValLen+1))
+
+	printRecord := func(recIdx int, rowVals []string) {
+		if tuplesOnly {
+			if recIdx > 1 {
+				fmt.Fprintln(w, tuplesSeparator)
+			}
+		} else {
+			recordTag := fmt.Sprintf("-[ RECORD %d ]", recIdx)
+			if totalMaxWidth > len(recordTag) {
+				recordTag += strings.Repeat("-", totalMaxWidth-len(recordTag))
+			}
+			fmt.Fprintln(w, recordTag)
+		}
+
+		for i, col := range cols {
+			fmt.Fprintf(w, "%-*s | %s\n", maxColLen, col, rowVals[i])
+		}
+	}
+
+	for i, rowVals := range bufferedRows {
+		printRecord(i+1, rowVals)
+	}
+
+	for rows.Next() {
+		if err := rows.Scan(scanArgs...); err != nil {
+			return err
+		}
+		rowCount++
+		rowVals := make([]string, len(cols))
+		for i := range values {
+			rowVals[i] = converters[i](values[i])
+		}
+		printRecord(rowCount, rowVals)
+	}
+
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	fmt.Fprintln(w)
+	return nil
+}
+
 func formatCSV(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.ColumnType, tuplesOnly bool) error {
 	cw := csv.NewWriter(w)
 	if !tuplesOnly {
@@ -962,9 +1064,10 @@ func formatParquet(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.C
 	return writer.Close()
 }
 
-func parsePsetOptions(psetOpt string, currentNull string, currentTuplesOnly bool) (string, bool) {
+func parsePsetOptions(psetOpt string, currentNull string, currentTuplesOnly bool, currentExpanded bool) (string, bool, bool) {
 	nullValue := currentNull
 	tuplesOnly := currentTuplesOnly
+	expanded := currentExpanded
 	if psetOpt != "" {
 		opts := strings.Split(psetOpt, ",")
 		for _, opt := range opts {
@@ -982,10 +1085,17 @@ func parsePsetOptions(psetOpt string, currentNull string, currentTuplesOnly bool
 					val := strings.ToLower(strings.TrimSpace(parts[1]))
 					tuplesOnly = (val == "on" || val == "1" || val == "true" || val == "yes")
 				}
+			case "expanded":
+				if len(parts) == 1 || parts[1] == "" {
+					expanded = true
+				} else {
+					val := strings.ToLower(strings.TrimSpace(parts[1]))
+					expanded = (val == "on" || val == "1" || val == "true" || val == "yes")
+				}
 			}
 		}
 	}
-	return nullValue, tuplesOnly
+	return nullValue, tuplesOnly, expanded
 }
 
 func main() {
@@ -1039,6 +1149,7 @@ func main() {
 		verbose     bool
 		showVersion bool
 		tuplesOnly  bool
+		expanded    bool
 	)
 
 	// Connection and execution options (matching vsql short flags exactly)
@@ -1054,6 +1165,8 @@ func main() {
 	flag.StringVar(&psetOpt, "P", "", "Set printing option VAR to ARG (e.g. -P null=STRING)")
 	flag.BoolVar(&tuplesOnly, "t", false, "Print rows only (-P tuples_only)")
 	flag.BoolVar(&tuplesOnly, "tuples-only", false, "Print rows only (-P tuples_only)")
+	flag.BoolVar(&expanded, "x", false, "Turn on expanded table output (-P expanded)")
+	flag.BoolVar(&expanded, "expanded", false, "Turn on expanded table output (-P expanded)")
 	flag.BoolVar(&showVersion, "version", false, "Print version information and exit")
 	flag.BoolVar(&showVersion, "V", false, "Print version information and exit (shorthand)")
 
@@ -1190,7 +1303,7 @@ func main() {
 	bufWriter := bufio.NewWriterSize(output, 65536)
 	defer bufWriter.Flush()
 
-	nullValue, tuplesOnly := parsePsetOptions(psetOpt, "", tuplesOnly)
+	nullValue, tuplesOnly, expanded := parsePsetOptions(psetOpt, "", tuplesOnly, expanded)
 
 	switch strings.ToLower(format) {
 	case "json":
@@ -1198,11 +1311,17 @@ func main() {
 	case "csv":
 		err = formatCSV(bufWriter, cols, rows, colTypes, tuplesOnly)
 	case "table":
-		err = formatTable(bufWriter, cols, rows, colTypes, nullValue, tuplesOnly)
+		if expanded {
+			err = formatExpanded(bufWriter, cols, rows, colTypes, nullValue, tuplesOnly)
+		} else {
+			err = formatTable(bufWriter, cols, rows, colTypes, nullValue, tuplesOnly)
+		}
+	case "expanded":
+		err = formatExpanded(bufWriter, cols, rows, colTypes, nullValue, tuplesOnly)
 	case "parquet":
 		err = formatParquet(bufWriter, cols, rows, colTypes)
 	default:
-		fmt.Fprintf(os.Stderr, "Error: Unknown format %q. Supported formats: table, json, csv, parquet\n", format)
+		fmt.Fprintf(os.Stderr, "Error: Unknown format %q. Supported formats: table, json, csv, parquet, expanded\n", format)
 		os.Exit(1)
 	}
 
