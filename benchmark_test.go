@@ -19,7 +19,7 @@ func BenchmarkStringConverter_Float(b *testing.B) {
 
 func BenchmarkStringConverter_String(b *testing.B) {
 	conv := buildStringConverter(nil, "")
-	val := "BNPP-CHINA-HQ-OFFICE"
+	val := "INTERNAL-REGIONAL-OFFICE"
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = conv(val)
@@ -56,7 +56,7 @@ func BenchmarkParquetConverter_Int(b *testing.B) {
 func BenchmarkTableFormatting_RowGeneration(b *testing.B) {
 	colWidths := []int{10, 10, 15, 15, 10}
 	isNumericCol := []bool{false, false, true, true, false}
-	rowVals := []string{"BNPP-CHINA", "BNPP", "-4278511.58222676", "-4278511.58222676", "2026-09-01"}
+	rowVals := []string{"INTERNAL-A", "INTERNAL", "-4278511.58222676", "-4278511.58222676", "2026-09-01"}
 
 	var buf bytes.Buffer
 	b.ResetTimer()
