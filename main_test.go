@@ -25,7 +25,7 @@ func TestBuildDSN(t *testing.T) {
 			password: "password123",
 			db:       "mydb",
 			tlsMode:  "prefer",
-			expected: "vertica://dbadmin:password123@localhost:5433/mydb?tlsmode=prefer",
+			expected: "vertica://dbadmin:password123@localhost:5433/mydb?tlsmode=prefer&use_prepared_statements=0",
 		},
 		{
 			name:     "no password",
@@ -35,7 +35,7 @@ func TestBuildDSN(t *testing.T) {
 			password: "",
 			db:       "mydb",
 			tlsMode:  "server",
-			expected: "vertica://dbadmin@localhost:5433/mydb?tlsmode=server",
+			expected: "vertica://dbadmin@localhost:5433/mydb?tlsmode=server&use_prepared_statements=0",
 		},
 		{
 			name:     "special characters",
@@ -45,7 +45,7 @@ func TestBuildDSN(t *testing.T) {
 			password: "pass@word",
 			db:       "db-name",
 			tlsMode:  "none",
-			expected: "vertica://user%2Fname:pass%40word@remote-host:1234/db-name?tlsmode=none",
+			expected: "vertica://user%2Fname:pass%40word@remote-host:1234/db-name?tlsmode=none&use_prepared_statements=0",
 		},
 	}
 

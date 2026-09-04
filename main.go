@@ -76,6 +76,7 @@ func loadEnv() {
 func buildDSN(host string, port int, user, password, db, tlsMode string) string {
 	queryParams := url.Values{}
 	queryParams.Add("tlsmode", tlsMode)
+	queryParams.Add("use_prepared_statements", "0")
 
 	var userInfo *url.Userinfo
 	if password != "" {
@@ -1318,13 +1319,8 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	vCtx := vertica.NewVerticaContext(ctx)
-	// Cache up to 20,000 rows in memory, paging any overflow to a local temp file on disk to maintain a low and flat RAM footprint
-	if err := vCtx.SetInMemoryResultRowLimit(20000); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Failed to set in-memory row limit: %v\n", err)
-	}
-
-	if err := db.PingContext(ctx); err != nil {
+	conn, err := db.Conn(ctx)
+	if err != nil {
 		if err == context.Canceled || strings.Contains(err.Error(), "canceled") {
 			fmt.Fprintln(os.Stderr, "Error: Connection attempt was canceled.")
 		} else if err == context.DeadlineExceeded || strings.Contains(err.Error(), "deadline exceeded") {
@@ -1338,9 +1334,16 @@ func main() {
 		}
 		os.Exit(1)
 	}
+	defer conn.Close()
+
+	vCtx := vertica.NewVerticaContext(ctx)
+	// Cache up to 20,000 rows in memory, paging any overflow to a local temp file on disk to maintain a low and flat RAM footprint
+	if err := vCtx.SetInMemoryResultRowLimit(20000); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to set in-memory row limit: %v\n", err)
+	}
 
 	queryStart := time.Now()
-	rows, err := db.QueryContext(vCtx, queryStr)
+	rows, err := conn.QueryContext(vCtx, queryStr)
 	if err != nil {
 		if err == context.Canceled || strings.Contains(err.Error(), "canceled") {
 			fmt.Fprintln(os.Stderr, "Error: Query was canceled.")
