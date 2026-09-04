@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,18 @@ import (
 	vertica "github.com/vertica/vertica-sql-go"
 	vlogger "github.com/vertica/vertica-sql-go/logger"
 )
+
+var version = "dev"
+
+func getVersion() string {
+	if version != "" && version != "dev" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return version
+}
 
 func init() {
 	// Silence non-critical driver warning messages (like late-arriving packets after cancellation)
@@ -990,8 +1003,9 @@ func main() {
 		format     string
 		outputPath string
 		psetOpt    string
-		timeout    time.Duration
-		verbose    bool
+		timeout     time.Duration
+		verbose     bool
+		showVersion bool
 	)
 
 	// Connection and execution options (matching vsql short flags exactly)
@@ -1005,6 +1019,8 @@ func main() {
 	flag.StringVar(&file, "f", "", "Path to a file containing the SQL query")
 	flag.StringVar(&outputPath, "o", "", "Output file path (optional, defaults to stdout)")
 	flag.StringVar(&psetOpt, "P", "", "Set printing option VAR to ARG (e.g. -P null=STRING)")
+	flag.BoolVar(&showVersion, "version", false, "Print version information and exit")
+	flag.BoolVar(&showVersion, "V", false, "Print version information and exit (shorthand)")
 
 	// Format extensions (non-vsql flags)
 	flag.StringVar(&format, "format", "table", "Output format: table, json, csv, parquet")
@@ -1013,6 +1029,11 @@ func main() {
 	flag.BoolVar(&verbose, "v", false, "Enable verbose driver warning and error logs (shorthand)")
 
 	flag.Parse()
+
+	if showVersion {
+		fmt.Printf("vsqlx version %s\n", getVersion())
+		return
+	}
 
 	if verbose {
 		vlogger.SetLogLevel(vlogger.WARN)

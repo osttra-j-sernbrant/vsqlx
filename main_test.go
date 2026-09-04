@@ -286,3 +286,18 @@ func TestCenterString(t *testing.T) {
 		})
 	}
 }
+
+func TestGetVersion(t *testing.T) {
+	orig := version
+	defer func() { version = orig }()
+
+	version = "v1.2.3"
+	if got := getVersion(); got != "v1.2.3" {
+		t.Errorf("getVersion() = %q, want %q", got, "v1.2.3")
+	}
+
+	version = "dev"
+	if got := getVersion(); got == "" {
+		t.Errorf("getVersion() should not be empty")
+	}
+}
