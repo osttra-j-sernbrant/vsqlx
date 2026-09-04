@@ -1,4 +1,4 @@
-module vsqlx
+module github.com/osttra-j-sernbrant/vsqlx
 
 go 1.27.1
 
