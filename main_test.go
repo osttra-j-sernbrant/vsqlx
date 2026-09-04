@@ -342,3 +342,51 @@ func TestParsePsetOptions(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatTiming(t *testing.T) {
+	tests := []struct {
+		name            string
+		firstFetchRows  int
+		firstFetchDur   time.Duration
+		allFormattedDur time.Duration
+		expected        string
+	}{
+		{
+			name:            "single row",
+			firstFetchRows:  1,
+			firstFetchDur:   56161 * time.Microsecond,
+			allFormattedDur: 56224 * time.Microsecond,
+			expected:        "Time: First fetch (1 row): 56.161 ms. All rows formatted: 56.224 ms",
+		},
+		{
+			name:            "multiple rows",
+			firstFetchRows:  2,
+			firstFetchDur:   61847 * time.Microsecond,
+			allFormattedDur: 62029 * time.Microsecond,
+			expected:        "Time: First fetch (2 rows): 61.847 ms. All rows formatted: 62.029 ms",
+		},
+		{
+			name:            "zero rows",
+			firstFetchRows:  0,
+			firstFetchDur:   59012 * time.Microsecond,
+			allFormattedDur: 59128 * time.Microsecond,
+			expected:        "Time: First fetch (0 rows): 59.012 ms. All rows formatted: 59.128 ms",
+		},
+		{
+			name:            "batch 1000 rows",
+			firstFetchRows:  1000,
+			firstFetchDur:   124546 * time.Microsecond,
+			allFormattedDur: 124718 * time.Microsecond,
+			expected:        "Time: First fetch (1000 rows): 124.546 ms. All rows formatted: 124.718 ms",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatTiming(tt.firstFetchRows, tt.firstFetchDur, tt.allFormattedDur)
+			if got != tt.expected {
+				t.Errorf("formatTiming() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}

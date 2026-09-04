@@ -8,7 +8,7 @@ Designed as a drop-in replacement for Vertica's native `vsql` CLI, `vsqlx` prese
 
 ## Features
 
-- **`vsql` Compatibility:** Drop-in flag compatibility (`-h`, `-p`, `-U`, `-w`, `-d`, `-m`, `-c`, `-f`, `-o`, `-P`, `-t`, `-x`, `-V`).
+- **`vsql` Compatibility:** Drop-in flag compatibility (`-h`, `-p`, `-U`, `-w`, `-d`, `-m`, `-c`, `-f`, `-o`, `-P`, `-t`, `-x`, `-i`, `-V`).
 - **Multiple Output Formats:**
   - `table` (default): ASCII formatted table matching `vsql` output and row counts.
   - `csv`: RFC 4180 compliant CSV output.
@@ -104,6 +104,22 @@ Display records vertically (`-[ RECORD 1 ]-`), ideal for inspecting wide tables 
 vsqlx -c "SELECT * FROM users;" -x
 ```
 
+### Query Timing
+
+Measure query fetch and formatting durations (matching `vsql -i` / `--timing`):
+
+```bash
+vsqlx -c "SELECT * FROM users;" -i
+```
+
+Output:
+```text
+...
+(100 rows)
+
+Time: First fetch (100 rows): 25.120 ms. All rows formatted: 25.430 ms
+```
+
 ---
 
 ## Command-Line Options
@@ -121,6 +137,7 @@ vsqlx -c "SELECT * FROM users;" -x
 | `-o` | Output file path | `stdout` |
 | `-t`, `--tuples-only` | Print rows only (`-P tuples_only`) | `false` |
 | `-x`, `--expanded` | Turn on expanded table output (`-P expanded`) | `false` |
+| `-i`, `--timing` | Print query execution timing stats | `false` |
 | `-P` | Set printing options (`-P null=STRING`, `-P tuples_only[=on\|off]`, `-P expanded[=on\|off]`) | empty string |
 | `-format` | Output format: `table`, `expanded`, `json`, `csv`, `parquet` | `table` |
 | `-timeout` | Query timeout duration (e.g. `30s`, `5m`, `1h`) | `5m0s` |

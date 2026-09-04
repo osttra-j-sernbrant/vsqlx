@@ -681,7 +681,25 @@ func formatRow(rowVals []string, colWidths []int, isNumericCol []bool) string {
 	return strings.Join(rowParts, "|")
 }
 
-func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.ColumnType, nullValue string, tuplesOnly bool) error {
+type queryMetrics struct {
+	firstFetchDur time.Duration
+	rowCount      int
+}
+
+func formatTiming(firstFetchRows int, firstFetchDur, allFormattedDur time.Duration) string {
+	rowWord := "rows"
+	if firstFetchRows == 1 {
+		rowWord = "row"
+	}
+	return fmt.Sprintf("Time: First fetch (%d %s): %.3f ms. All rows formatted: %.3f ms",
+		firstFetchRows,
+		rowWord,
+		float64(firstFetchDur.Microseconds())/1000.0,
+		float64(allFormattedDur.Microseconds())/1000.0,
+	)
+}
+
+func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.ColumnType, nullValue string, tuplesOnly bool, startTime time.Time) (queryMetrics, error) {
 	converters := make([]func(any) string, len(colTypes))
 	isNumericCol := make([]bool, len(cols))
 
@@ -708,9 +726,10 @@ func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.Col
 	}
 
 	rowCount := 0
+	var firstFetchDur time.Duration
 	for rows.Next() {
 		if err := rows.Scan(scanArgs...); err != nil {
-			return err
+			return queryMetrics{}, err
 		}
 		rowVals := make([]string, len(cols))
 		for i := range values {
@@ -725,6 +744,7 @@ func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.Col
 			break
 		}
 	}
+	firstFetchDur = time.Since(startTime)
 
 	if !tuplesOnly {
 		// Print centered headers matching vsql perfectly
@@ -749,7 +769,7 @@ func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.Col
 	// Stream any remaining rows dynamically using the calculated column widths
 	for rows.Next() {
 		if err := rows.Scan(scanArgs...); err != nil {
-			return err
+			return queryMetrics{}, err
 		}
 
 		rowVals := make([]string, len(cols))
@@ -761,7 +781,7 @@ func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.Col
 	}
 
 	if err := rows.Err(); err != nil {
-		return err
+		return queryMetrics{}, err
 	}
 
 	if !tuplesOnly {
@@ -772,10 +792,13 @@ func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.Col
 		}
 	}
 	fmt.Fprintln(w)
-	return nil
+	return queryMetrics{
+		firstFetchDur: firstFetchDur,
+		rowCount:      rowCount,
+	}, nil
 }
 
-func formatExpanded(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.ColumnType, nullValue string, tuplesOnly bool) error {
+func formatExpanded(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.ColumnType, nullValue string, tuplesOnly bool, startTime time.Time) (queryMetrics, error) {
 	converters := make([]func(any) string, len(colTypes))
 	for i, ct := range colTypes {
 		converters[i] = buildStringConverter(ct, nullValue)
@@ -799,9 +822,10 @@ func formatExpanded(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.
 	}
 
 	rowCount := 0
+	var firstFetchDur time.Duration
 	for rows.Next() {
 		if err := rows.Scan(scanArgs...); err != nil {
-			return err
+			return queryMetrics{}, err
 		}
 		rowVals := make([]string, len(cols))
 		for i := range values {
@@ -821,15 +845,19 @@ func formatExpanded(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.
 			break
 		}
 	}
+	firstFetchDur = time.Since(startTime)
 
 	if err := rows.Err(); err != nil {
-		return err
+		return queryMetrics{}, err
 	}
 
 	if rowCount == 0 {
 		fmt.Fprintln(w, "(No rows)")
 		fmt.Fprintln(w)
-		return nil
+		return queryMetrics{
+			firstFetchDur: firstFetchDur,
+			rowCount:      0,
+		}, nil
 	}
 
 	totalMaxWidth := maxColLen + 3 + maxValLen
@@ -859,7 +887,7 @@ func formatExpanded(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.
 
 	for rows.Next() {
 		if err := rows.Scan(scanArgs...); err != nil {
-			return err
+			return queryMetrics{}, err
 		}
 		rowCount++
 		rowVals := make([]string, len(cols))
@@ -870,18 +898,21 @@ func formatExpanded(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.
 	}
 
 	if err := rows.Err(); err != nil {
-		return err
+		return queryMetrics{}, err
 	}
 
 	fmt.Fprintln(w)
-	return nil
+	return queryMetrics{
+		firstFetchDur: firstFetchDur,
+		rowCount:      rowCount,
+	}, nil
 }
 
-func formatCSV(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.ColumnType, tuplesOnly bool) error {
+func formatCSV(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.ColumnType, tuplesOnly bool, startTime time.Time) (queryMetrics, error) {
 	cw := csv.NewWriter(w)
 	if !tuplesOnly {
 		if err := cw.Write(cols); err != nil {
-			return err
+			return queryMetrics{}, err
 		}
 	}
 
@@ -896,57 +927,88 @@ func formatCSV(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.Colum
 		scanArgs[i] = &values[i]
 	}
 
+	rowCount := 0
+	var firstFetchDur time.Duration
 	for rows.Next() {
 		if err := rows.Scan(scanArgs...); err != nil {
-			return err
+			return queryMetrics{}, err
+		}
+		if rowCount == 0 {
+			firstFetchDur = time.Since(startTime)
 		}
 		rowVals := make([]string, len(cols))
 		for i := range values {
 			rowVals[i] = converters[i](values[i])
 		}
 		if err := cw.Write(rowVals); err != nil {
-			return err
+			return queryMetrics{}, err
 		}
+		rowCount++
 	}
 
 	if err := rows.Err(); err != nil {
-		return err
+		return queryMetrics{}, err
+	}
+
+	if rowCount == 0 {
+		firstFetchDur = time.Since(startTime)
 	}
 
 	cw.Flush()
-	return cw.Error()
+	if err := cw.Error(); err != nil {
+		return queryMetrics{}, err
+	}
+
+	return queryMetrics{
+		firstFetchDur: firstFetchDur,
+		rowCount:      rowCount,
+	}, nil
 }
 
-func formatJSON(w io.Writer, cols []string, rows *sql.Rows) error {
+func formatJSON(w io.Writer, cols []string, rows *sql.Rows, startTime time.Time) (queryMetrics, error) {
 	scanArgs := make([]any, len(cols))
 	values := make([]any, len(cols))
 	for i := range values {
 		scanArgs[i] = &values[i]
 	}
 
+	rowCount := 0
+	var firstFetchDur time.Duration
 	var results []map[string]any
 	for rows.Next() {
 		if err := rows.Scan(scanArgs...); err != nil {
-			return err
+			return queryMetrics{}, err
+		}
+		if rowCount == 0 {
+			firstFetchDur = time.Since(startTime)
 		}
 		rowMap := make(map[string]any)
 		for i, col := range cols {
 			rowMap[col] = toJSONValue(values[i])
 		}
 		results = append(results, rowMap)
+		rowCount++
 	}
 
 	if err := rows.Err(); err != nil {
-		return err
+		return queryMetrics{}, err
 	}
 
-	if results == nil {
+	if rowCount == 0 {
+		firstFetchDur = time.Since(startTime)
 		results = []map[string]any{}
 	}
 
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(results)
+	if err := encoder.Encode(results); err != nil {
+		return queryMetrics{}, err
+	}
+
+	return queryMetrics{
+		firstFetchDur: firstFetchDur,
+		rowCount:      rowCount,
+	}, nil
 }
 
 type orderedGroup struct {
@@ -958,7 +1020,7 @@ func (o orderedGroup) Fields() []parquet.Field {
 	return o.orderedFields
 }
 
-func formatParquet(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.ColumnType) error {
+func formatParquet(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.ColumnType, startTime time.Time) (queryMetrics, error) {
 	group := parquet.Group{}
 	for _, ct := range colTypes {
 		var node parquet.Node
@@ -1031,10 +1093,15 @@ func formatParquet(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.C
 		scanArgs[i] = &values[i]
 	}
 
+	rowCount := 0
+	var firstFetchDur time.Duration
 	var batch []any
 	for rows.Next() {
 		if err := rows.Scan(scanArgs...); err != nil {
-			return err
+			return queryMetrics{}, err
+		}
+		if rowCount == 0 {
+			firstFetchDur = time.Since(startTime)
 		}
 
 		rowMap := make(map[string]any)
@@ -1042,26 +1109,38 @@ func formatParquet(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.C
 			rowMap[ct.Name()] = converters[i](values[i])
 		}
 		batch = append(batch, rowMap)
+		rowCount++
 
 		if len(batch) >= 10000 {
 			if _, err := writer.Write(batch); err != nil {
-				return err
+				return queryMetrics{}, err
 			}
 			batch = batch[:0]
 		}
 	}
 
 	if err := rows.Err(); err != nil {
-		return err
+		return queryMetrics{}, err
+	}
+
+	if rowCount == 0 {
+		firstFetchDur = time.Since(startTime)
 	}
 
 	if len(batch) > 0 {
 		if _, err := writer.Write(batch); err != nil {
-			return err
+			return queryMetrics{}, err
 		}
 	}
 
-	return writer.Close()
+	if err := writer.Close(); err != nil {
+		return queryMetrics{}, err
+	}
+
+	return queryMetrics{
+		firstFetchDur: firstFetchDur,
+		rowCount:      rowCount,
+	}, nil
 }
 
 func parsePsetOptions(psetOpt string, currentNull string, currentTuplesOnly bool, currentExpanded bool) (string, bool, bool) {
@@ -1150,6 +1229,7 @@ func main() {
 		showVersion bool
 		tuplesOnly  bool
 		expanded    bool
+		timing      bool
 	)
 
 	// Connection and execution options (matching vsql short flags exactly)
@@ -1167,6 +1247,8 @@ func main() {
 	flag.BoolVar(&tuplesOnly, "tuples-only", false, "Print rows only (-P tuples_only)")
 	flag.BoolVar(&expanded, "x", false, "Turn on expanded table output (-P expanded)")
 	flag.BoolVar(&expanded, "expanded", false, "Turn on expanded table output (-P expanded)")
+	flag.BoolVar(&timing, "i", false, "Print timing output (-i or --timing)")
+	flag.BoolVar(&timing, "timing", false, "Print timing output (-i or --timing)")
 	flag.BoolVar(&showVersion, "version", false, "Print version information and exit")
 	flag.BoolVar(&showVersion, "V", false, "Print version information and exit (shorthand)")
 
@@ -1257,6 +1339,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	queryStart := time.Now()
 	rows, err := db.QueryContext(vCtx, queryStr)
 	if err != nil {
 		if err == context.Canceled || strings.Contains(err.Error(), "canceled") {
@@ -1305,21 +1388,22 @@ func main() {
 
 	nullValue, tuplesOnly, expanded := parsePsetOptions(psetOpt, "", tuplesOnly, expanded)
 
+	var metrics queryMetrics
 	switch strings.ToLower(format) {
 	case "json":
-		err = formatJSON(bufWriter, cols, rows)
+		metrics, err = formatJSON(bufWriter, cols, rows, queryStart)
 	case "csv":
-		err = formatCSV(bufWriter, cols, rows, colTypes, tuplesOnly)
+		metrics, err = formatCSV(bufWriter, cols, rows, colTypes, tuplesOnly, queryStart)
 	case "table":
 		if expanded {
-			err = formatExpanded(bufWriter, cols, rows, colTypes, nullValue, tuplesOnly)
+			metrics, err = formatExpanded(bufWriter, cols, rows, colTypes, nullValue, tuplesOnly, queryStart)
 		} else {
-			err = formatTable(bufWriter, cols, rows, colTypes, nullValue, tuplesOnly)
+			metrics, err = formatTable(bufWriter, cols, rows, colTypes, nullValue, tuplesOnly, queryStart)
 		}
 	case "expanded":
-		err = formatExpanded(bufWriter, cols, rows, colTypes, nullValue, tuplesOnly)
+		metrics, err = formatExpanded(bufWriter, cols, rows, colTypes, nullValue, tuplesOnly, queryStart)
 	case "parquet":
-		err = formatParquet(bufWriter, cols, rows, colTypes)
+		metrics, err = formatParquet(bufWriter, cols, rows, colTypes, queryStart)
 	default:
 		fmt.Fprintf(os.Stderr, "Error: Unknown format %q. Supported formats: table, json, csv, parquet, expanded\n", format)
 		os.Exit(1)
@@ -1339,5 +1423,14 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: Failed to format output: %v\n", err)
 		}
 		os.Exit(1)
+	}
+
+	if timing {
+		firstFetchRows := metrics.rowCount
+		if firstFetchRows > 1000 {
+			firstFetchRows = 1000
+		}
+		allFormattedDur := time.Since(queryStart)
+		fmt.Fprintln(os.Stdout, formatTiming(firstFetchRows, metrics.firstFetchDur, allFormattedDur))
 	}
 }
