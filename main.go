@@ -681,7 +681,7 @@ func formatRow(rowVals []string, colWidths []int, isNumericCol []bool) string {
 	return strings.Join(rowParts, "|")
 }
 
-func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.ColumnType, nullValue string) error {
+func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.ColumnType, nullValue string, tuplesOnly bool) error {
 	converters := make([]func(any) string, len(colTypes))
 	isNumericCol := make([]bool, len(cols))
 
@@ -726,18 +726,20 @@ func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.Col
 		}
 	}
 
-	// Print centered headers matching vsql perfectly
-	var headerParts []string
-	for i, col := range cols {
-		headerParts = append(headerParts, fmt.Sprintf(" %s ", centerString(col, colWidths[i])))
-	}
-	fmt.Fprintln(w, strings.Join(headerParts, "|"))
+	if !tuplesOnly {
+		// Print centered headers matching vsql perfectly
+		var headerParts []string
+		for i, col := range cols {
+			headerParts = append(headerParts, fmt.Sprintf(" %s ", centerString(col, colWidths[i])))
+		}
+		fmt.Fprintln(w, strings.Join(headerParts, "|"))
 
-	var dividerParts []string
-	for _, width := range colWidths {
-		dividerParts = append(dividerParts, strings.Repeat("-", width+2))
+		var dividerParts []string
+		for _, width := range colWidths {
+			dividerParts = append(dividerParts, strings.Repeat("-", width+2))
+		}
+		fmt.Fprintln(w, strings.Join(dividerParts, "+"))
 	}
-	fmt.Fprintln(w, strings.Join(dividerParts, "+"))
 
 	// Print buffered rows
 	for _, rowVals := range bufferedRows {
@@ -762,19 +764,23 @@ func formatTable(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.Col
 		return err
 	}
 
-	if rowCount == 1 {
-		fmt.Fprintln(w, "(1 row)")
-	} else {
-		fmt.Fprintf(w, "(%d rows)\n", rowCount)
+	if !tuplesOnly {
+		if rowCount == 1 {
+			fmt.Fprintln(w, "(1 row)")
+		} else {
+			fmt.Fprintf(w, "(%d rows)\n", rowCount)
+		}
 	}
 	fmt.Fprintln(w)
 	return nil
 }
 
-func formatCSV(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.ColumnType) error {
+func formatCSV(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.ColumnType, tuplesOnly bool) error {
 	cw := csv.NewWriter(w)
-	if err := cw.Write(cols); err != nil {
-		return err
+	if !tuplesOnly {
+		if err := cw.Write(cols); err != nil {
+			return err
+		}
 	}
 
 	converters := make([]func(any) string, len(colTypes))
@@ -956,6 +962,32 @@ func formatParquet(w io.Writer, cols []string, rows *sql.Rows, colTypes []*sql.C
 	return writer.Close()
 }
 
+func parsePsetOptions(psetOpt string, currentNull string, currentTuplesOnly bool) (string, bool) {
+	nullValue := currentNull
+	tuplesOnly := currentTuplesOnly
+	if psetOpt != "" {
+		opts := strings.Split(psetOpt, ",")
+		for _, opt := range opts {
+			parts := strings.SplitN(strings.TrimSpace(opt), "=", 2)
+			optKey := strings.ToLower(strings.TrimSpace(parts[0]))
+			switch optKey {
+			case "null":
+				if len(parts) == 2 {
+					nullValue = parts[1]
+				}
+			case "tuples_only":
+				if len(parts) == 1 || parts[1] == "" {
+					tuplesOnly = true
+				} else {
+					val := strings.ToLower(strings.TrimSpace(parts[1]))
+					tuplesOnly = (val == "on" || val == "1" || val == "true" || val == "yes")
+				}
+			}
+		}
+	}
+	return nullValue, tuplesOnly
+}
+
 func main() {
 	loadEnv()
 
@@ -1002,10 +1034,11 @@ func main() {
 		file       string
 		format     string
 		outputPath string
-		psetOpt    string
+		psetOpt     string
 		timeout     time.Duration
 		verbose     bool
 		showVersion bool
+		tuplesOnly  bool
 	)
 
 	// Connection and execution options (matching vsql short flags exactly)
@@ -1019,6 +1052,8 @@ func main() {
 	flag.StringVar(&file, "f", "", "Path to a file containing the SQL query")
 	flag.StringVar(&outputPath, "o", "", "Output file path (optional, defaults to stdout)")
 	flag.StringVar(&psetOpt, "P", "", "Set printing option VAR to ARG (e.g. -P null=STRING)")
+	flag.BoolVar(&tuplesOnly, "t", false, "Print rows only (-P tuples_only)")
+	flag.BoolVar(&tuplesOnly, "tuples-only", false, "Print rows only (-P tuples_only)")
 	flag.BoolVar(&showVersion, "version", false, "Print version information and exit")
 	flag.BoolVar(&showVersion, "V", false, "Print version information and exit (shorthand)")
 
@@ -1155,23 +1190,15 @@ func main() {
 	bufWriter := bufio.NewWriterSize(output, 65536)
 	defer bufWriter.Flush()
 
-	nullValue := ""
-	if psetOpt != "" {
-		parts := strings.SplitN(psetOpt, "=", 2)
-		if strings.EqualFold(parts[0], "null") {
-			if len(parts) == 2 {
-				nullValue = parts[1]
-			}
-		}
-	}
+	nullValue, tuplesOnly := parsePsetOptions(psetOpt, "", tuplesOnly)
 
 	switch strings.ToLower(format) {
 	case "json":
 		err = formatJSON(bufWriter, cols, rows)
 	case "csv":
-		err = formatCSV(bufWriter, cols, rows, colTypes)
+		err = formatCSV(bufWriter, cols, rows, colTypes, tuplesOnly)
 	case "table":
-		err = formatTable(bufWriter, cols, rows, colTypes, nullValue)
+		err = formatTable(bufWriter, cols, rows, colTypes, nullValue, tuplesOnly)
 	case "parquet":
 		err = formatParquet(bufWriter, cols, rows, colTypes)
 	default:

@@ -301,3 +301,36 @@ func TestGetVersion(t *testing.T) {
 		t.Errorf("getVersion() should not be empty")
 	}
 }
+
+func TestParsePsetOptions(t *testing.T) {
+	tests := []struct {
+		name              string
+		opt               string
+		initialNull       string
+		initialTuples     bool
+		expectedNull      string
+		expectedTuples    bool
+	}{
+		{"empty", "", "", false, "", false},
+		{"null only", "null=(null)", "", false, "(null)", false},
+		{"tuples_only bare flag", "tuples_only", "", false, "", true},
+		{"tuples_only=on", "tuples_only=on", "", false, "", true},
+		{"tuples_only=1", "tuples_only=1", "", false, "", true},
+		{"tuples_only=off", "tuples_only=off", "", true, "", false},
+		{"tuples_only=false", "tuples_only=false", "", true, "", false},
+		{"combined null and tuples_only", "null=NULL,tuples_only=on", "", false, "NULL", true},
+		{"preserve initial tuples_only when only null is set", "null=NA", "", true, "NA", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotNull, gotTuples := parsePsetOptions(tt.opt, tt.initialNull, tt.initialTuples)
+			if gotNull != tt.expectedNull {
+				t.Errorf("parsePsetOptions() null = %q, want %q", gotNull, tt.expectedNull)
+			}
+			if gotTuples != tt.expectedTuples {
+				t.Errorf("parsePsetOptions() tuplesOnly = %v, want %v", gotTuples, tt.expectedTuples)
+			}
+		})
+	}
+}

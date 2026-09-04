@@ -8,7 +8,7 @@ Designed as a drop-in replacement for Vertica's native `vsql` CLI, `vsqlx` prese
 
 ## Features
 
-- **`vsql` Compatibility:** Drop-in flag compatibility (`-h`, `-p`, `-U`, `-w`, `-d`, `-m`, `-c`, `-f`, `-o`, `-P`, `-V`).
+- **`vsql` Compatibility:** Drop-in flag compatibility (`-h`, `-p`, `-U`, `-w`, `-d`, `-m`, `-c`, `-f`, `-o`, `-P`, `-t`, `-V`).
 - **Multiple Output Formats:**
   - `table` (default): ASCII formatted table matching `vsql` output and row counts.
   - `csv`: RFC 4180 compliant CSV output.
@@ -88,6 +88,14 @@ Matching `vsql`'s `-P null=...` option:
 vsqlx -c "SELECT * FROM users;" -P null="(null)"
 ```
 
+### Tuples Only Mode
+
+Print only data rows without column headers, table borders, or row count footers (matching `vsql -t` / `-P tuples_only`):
+
+```bash
+vsqlx -c "SELECT id, name FROM users;" -t
+```
+
 ---
 
 ## Command-Line Options
@@ -103,7 +111,8 @@ vsqlx -c "SELECT * FROM users;" -P null="(null)"
 | `-c` | SQL query to execute | |
 | `-f` | Path to a file containing the SQL query | |
 | `-o` | Output file path | `stdout` |
-| `-P` | Set printing options (`-P null=STRING`) | empty string |
+| `-t`, `--tuples-only` | Print rows only (`-P tuples_only`) | `false` |
+| `-P` | Set printing options (`-P null=STRING`, `-P tuples_only[=on\|off]`) | empty string |
 | `-format` | Output format: `table`, `json`, `csv`, `parquet` | `table` |
 | `-timeout` | Query timeout duration (e.g. `30s`, `5m`, `1h`) | `5m0s` |
 | `-v`, `-verbose` | Enable verbose driver warnings and error logs | `false` |
